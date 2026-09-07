@@ -10,18 +10,10 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 die() { printf 'preen: %s\n' "$*" >&2; exit 1; }
 
 # ---- render one file, no fzf -------------------------------------------------
-# glow drops all colour when stdout is not a terminal, and fzf hands previews a
-# pipe. Give it a pseudo-tty, then strip the CRs and the ^D line that leaves.
+# glow 3 keeps its colours when stdout is a pipe, which is what fzf hands a
+# preview. glow 2 silently drops them, so install.sh requires 3.0.0 or newer.
 render_md() {
-  local w="${1:-$(tput cols 2>/dev/null || echo 80)}" f="$2"
-  if [ -t 1 ] || ! command -v script >/dev/null 2>&1; then
-    glow -s "$GLOW_STYLE" -w "$w" "$f"
-    return
-  fi
-  case "$(uname -s)" in
-    Darwin|*BSD*) script -q /dev/null glow -s "$GLOW_STYLE" -w "$w" "$f" 2>/dev/null ;;
-    *)            script -qec "$(printf '%q ' glow -s "$GLOW_STYLE" -w "$w" "$f")" /dev/null 2>/dev/null ;;
-  esac | tr -d '\r' | sed '1{/^\^D/d;}'
+  glow -s "$GLOW_STYLE" -w "${1:-$(tput cols 2>/dev/null || echo 80)}" "$2"
 }
 
 render_diff() {
@@ -109,6 +101,9 @@ fi
 
 command -v fzf  >/dev/null || die "fzf is not installed"
 command -v glow >/dev/null || die "glow is not installed"
+glow_major() { glow --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p'; }
+[ "$(glow_major)" -ge 3 ] 2>/dev/null \
+  || die "glow 3 or newer is needed for coloured previews (found: $(glow --version 2>/dev/null)); run install.sh"
 
 # ---- build the file list -----------------------------------------------------
 if [ "$KIND" = md ]; then

@@ -4,11 +4,17 @@ Markdown and diffs in the terminal, without opening an editor.
 
 Birds preen to tidy their feathers. You preen your diff before you commit.
 
+![preen browsing a diff, then flipping between side-by-side and inline](demo/preen.gif)
+
+Markdown mode, same keys:
+
+![preen rendering markdown](demo/preen-md.png)
+
 Thin glue over three tools that already do the hard part:
 
 | job | tool |
 |---|---|
-| render markdown | `glow` |
+| render markdown | `glow` (3.0 or newer) |
 | render diffs | `delta` |
 | file navigation | `fzf` |
 
@@ -92,11 +98,24 @@ The diff layout lives in two named delta features so `preen` can flip between th
 
 Keep `side-by-side` out of the main `[delta]` section. Options there beat feature options, and the toggle stops working.
 
+## Rebuilding the recording
+
+```sh
+brew install vhs
+./demo/seed-repo.sh /tmp/preen-demo-repo
+vhs demo/preen.tape
+```
+
+`demo/preen.tape` drives the whole thing and writes both `demo/preen.gif` and
+`demo/preen-md.png`.
+
 ## Notes
 
-- `glow` prints no colour when its output is not a terminal, and fzf hands
-  previews a pipe. `preen` runs glow under a pseudo-tty (`script`) to keep the
-  colours, then strips the stray CRs. Without that the preview is grey.
+- **glow 3.0 or newer is required.** glow 2 throws away all colour when its
+  output is not a terminal, and fzf hands previews a pipe, so every preview came
+  out grey. Wrapping glow in a pseudo-tty (`script`) fixed it under tmux but hung
+  forever inside fzf elsewhere. glow 3 keeps its colour in a pipe, so `preen`
+  calls it directly and `install.sh` upgrades anything older.
 - Preview scrolling jumps; it is not animated. fzf has no timer or delay action,
   so a `--bind` chain of `preview-down` steps still paints one frame. Smooth
   scrolling would need an app that redraws on its own tick, the way

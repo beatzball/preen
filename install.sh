@@ -157,6 +157,29 @@ if [ "$OS" = Darwin ] && [ "$PKG" != brew ] && [ "$NO_DEPS" = 0 ] && [ "$USER_ON
   warn "Homebrew not found; using GitHub releases instead (install brew from https://brew.sh for updates)"
 fi
 ensure_tool glow  charmbracelet/glow  "glow_.*${OS_GLOW}_${ARCH_GLOW}\.tar\.gz$"        "glow"
+# glow 2 throws away colour when its output is a pipe, which is exactly what fzf
+# hands a preview. glow 3 keeps it, so anything older has to be upgraded.
+glow_major() { glow --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p'; }
+if have glow && ! { [ "$(glow_major)" -ge 3 ] 2>/dev/null; }; then
+  if [ "$NO_DEPS" = 1 ]; then
+    warn "glow $(glow_major) is too old for coloured previews; need 3 or newer"
+  else
+    warn "glow $(glow_major) drops colour in pipes; upgrading to 3 or newer"
+    case "$PKG" in
+      brew)    run brew upgrade glow ;;
+      apt-get) run $SUDO apt-get install -y --only-upgrade glow ;;
+      dnf)     run $SUDO dnf upgrade -y glow ;;
+      pacman)  run $SUDO pacman -S --noconfirm glow ;;
+      zypper)  run $SUDO zypper update -y glow ;;
+      apk)     run $SUDO apk upgrade glow ;;
+    esac
+    { [ "$DRY" = 1 ] || { [ "$(glow_major)" -ge 3 ] 2>/dev/null; }; } \
+      || gh_install glow charmbracelet/glow "glow_.*${OS_GLOW}_${ARCH_GLOW}\.tar\.gz$" "glow"
+    { [ "$DRY" = 1 ] || { [ "$(glow_major)" -ge 3 ] 2>/dev/null; }; } \
+      && ok "glow $(glow_major) is new enough" \
+      || err "still on glow $(glow_major); previews will have no colour"
+  fi
+fi
 ensure_tool delta dandavison/delta    "delta-.*${ARCH_DELTA}-${OS_DELTA}\.tar\.gz$"     "delta"
 ensure_tool fzf   junegunn/fzf        "fzf-.*${OS_FZF}_${ARCH_FZF}\.tar\.gz$"           "fzf"
 have git || err "git is not installed — install it and run this again"
