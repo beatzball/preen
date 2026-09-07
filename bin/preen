@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# preen — browse markdown and diffs in the terminal.
+#   glow renders the markdown, delta renders the diffs, fzf does the file nav.
+set -uo pipefail
+
+GLOW_STYLE="${PREEN_GLOW_STYLE:-$HOME/.config/glow/roost.json}"
+[ -f "$GLOW_STYLE" ] || GLOW_STYLE="dark"
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+die() { printf 'preen: %s\n' "$*" >&2; exit 1; }
+
+# ---- render one file, no fzf -------------------------------------------------
+# glow drops all colour when stdout is not a terminal, and fzf hands previews a
+# pipe. Give it a pseudo-tty, then strip the CRs and the ^D line that leaves.
+render_md() {
+  local w="${1:-$(tput cols 2>/dev/null || echo 80)}" f="$2"
+  if [ -t 1 ] || ! command -v script >/dev/null 2>&1; then
+    glow -s "$GLOW_STYLE" -w "$w" "$f"
+    return
+  fi
+  case "$(uname -s)" in
+    Darwin|*BSD*) script -q /dev/null glow -s "$GLOW_STYLE" -w "$w" "$f" 2>/dev/null ;;
+    *)            script -qec "$(printf '%q ' glow -s "$GLOW_STYLE" -w "$w" "$f")" /dev/null 2>/dev/null ;;
+  esac | tr -d '\r' | sed '1{/^\^D/d;}'
+}
+
+render_diff() {
+  local width="$1" file="$2" mode="$3" rev="$4"
+  {
+    if [ -n "$rev" ]; then
+      git diff --color=always "$rev" -- "$file"
+    elif ! git ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
+      # untracked: show the whole file as an addition
+      git diff --no-index --color=always -- /dev/null "$file" 2>/dev/null
+    elif git rev-parse --verify -q HEAD >/dev/null 2>&1; then
+      git diff --color=always HEAD -- "$file"   # staged and unstaged together
+    else
+      git diff --color=always --cached -- "$file"   # repo with no commit yet
+    fi
+  } | delta --features "$mode" --paging=never --width "$width"
+}
+
+# ---- hooks fzf calls back into ----------------------------------------------
+case "${1:-}" in
+  --preview)
+    f="$2"; w="${FZF_PREVIEW_COLUMNS:-80}"
+    kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
+    if [ "$kind" = md ]; then
+      render_md "$w" "$f"
+    else
+      render_diff "$w" "$f" \
+        "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" \
+        "$(cat "$PREEN_STATE/rev"  2>/dev/null || echo '')"
+    fi
+    exit 0 ;;
+  --show)
+    f="$2"; w="$(tput cols)"
+    kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
+    if [ "$kind" = md ]; then
+      render_md "$w" "$f" | less -R
+    else
+      render_diff "$w" "$f" \
+        "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" \
+        "$(cat "$PREEN_STATE/rev"  2>/dev/null || echo '')" | less -R
+    fi
+    exit 0 ;;
+  --toggle)
+    m="$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)"
+    [ "$m" = sbs ] && echo inline > "$PREEN_STATE/mode" || echo sbs > "$PREEN_STATE/mode"
+    exit 0 ;;
+esac
+
+# ---- pick a mode -------------------------------------------------------------
+KIND=""; REV=""
+case "${1:-}" in
+  md)   KIND=md;   shift; TARGET="${1:-.}" ;;
+  diff) KIND=diff; shift; REV="${1:-}" ;;
+  -h|--help)
+    cat <<'H'
+preen — markdown and diffs in the terminal
+
+  preen                 auto: diffs in a git repo, else markdown
+  preen md [DIR]        browse markdown files under DIR (default .)
+  preen diff [REV]      browse files changed vs REV (default: working tree)
+  preen FILE.md         render one file and quit
+
+keys inside the picker
+  ctrl-d / ctrl-u            scroll the preview 8 lines
+  pgdn / pgup                scroll the preview half a page
+  shift-down / shift-up      scroll the preview one line
+  home / end                 jump the preview to top or bottom
+  ctrl-s   toggle side-by-side <-> inline (diff mode)
+           start in inline with PREEN_LAYOUT=inline
+  enter    open the full render in a pager
+  ctrl-e   open in $EDITOR
+  ctrl-/   hide or show the preview
+  esc      quit
+H
+    exit 0 ;;
+  "") ;;
+  *)
+    [ -f "$1" ] || die "no such file: $1"
+    render_md "$(tput cols)" "$1"; exit 0 ;;
+esac
+
+if [ -z "$KIND" ]; then
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 && KIND=diff || { KIND=md; TARGET=.; }
+fi
+
+command -v fzf  >/dev/null || die "fzf is not installed"
+command -v glow >/dev/null || die "glow is not installed"
+
+# ---- build the file list -----------------------------------------------------
+if [ "$KIND" = md ]; then
+  command -v delta >/dev/null || true
+  FILES="$(find "${TARGET:-.}" -type f \( -name '*.md' -o -name '*.markdown' \) \
+            -not -path '*/.git/*' -not -path '*/node_modules/*' | sed 's|^\./||' | sort)"
+  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nenter render · ctrl-e edit · ctrl-/ hide · esc quit'
+else
+  command -v delta >/dev/null || die "delta is not installed"
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
+  if [ -n "$REV" ]; then
+    FILES="$(git diff --name-only "$REV")"
+  else
+    if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
+      FILES="$(git diff --name-only HEAD; git ls-files --others --exclude-standard)"
+    else
+      FILES="$(git diff --name-only --cached; git ls-files --others --exclude-standard)"
+    fi
+    FILES="$(printf '%s\n' "$FILES" | sort -u)"
+  fi
+  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc quit'
+fi
+
+FILES="$(printf '%s\n' "$FILES" | grep -v '^$')"
+[ -n "$FILES" ] || die "nothing to show ($KIND mode)"
+
+# ---- state shared with the fzf callbacks ------------------------------------
+PREEN_STATE="$(mktemp -d "${TMPDIR:-/tmp}/preen.XXXXXX")"
+trap 'rm -rf "$PREEN_STATE"' EXIT
+echo "$KIND" > "$PREEN_STATE/kind"
+case "${PREEN_LAYOUT:-sbs}" in inline) echo inline ;; *) echo sbs ;; esac > "$PREEN_STATE/mode"
+echo "$REV"  > "$PREEN_STATE/rev"
+export PREEN_STATE GLOW_STYLE
+
+printf '%s\n' "$FILES" | fzf \
+  --ansi --no-multi --cycle \
+  --layout=reverse \
+  --border=rounded \
+  --border-label=" preen · $KIND${REV:+ · $REV} " \
+  --preview "$SELF --preview {}" \
+  --preview-window 'right,65%,border-left' \
+  --header "$HEADER" \
+  --prompt '  file ❯ ' \
+  --pointer '▎' --marker ' ' \
+  --color 'fg:#c8c3e0,fg+:#e0dcf5,bg+:#2a2640,hl:#bd93f9,hl+:#bd93f9' \
+  --color 'border:#7c6ff0,label:#bd93f9,prompt:#7c6ff0,pointer:#bd93f9' \
+  --color 'header:#8a84b0,info:#8a84b0,spinner:#7c6ff0,marker:#3a3558' \
+  --bind "ctrl-s:execute-silent($SELF --toggle)+refresh-preview" \
+  --bind "enter:execute($SELF --show {})" \
+  --bind "ctrl-e:execute(\${EDITOR:-vi} {})" \
+  --bind 'ctrl-/:toggle-preview' \
+  --bind 'ctrl-d:preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down' \
+  --bind 'ctrl-u:preview-up+preview-up+preview-up+preview-up+preview-up+preview-up+preview-up+preview-up' \
+  --bind 'pgdn:preview-half-page-down' \
+  --bind 'pgup:preview-half-page-up' \
+  --bind 'shift-down:preview-down' \
+  --bind 'shift-up:preview-up' \
+  --bind 'home:preview-top' \
+  --bind 'end:preview-bottom' \
+  >/dev/null
