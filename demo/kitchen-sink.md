@@ -71,7 +71,7 @@ const render = async (path) => {
 
 ## Inline image
 
-![roost overview](https://example.com/roost.png)
+![preen rendering markdown](preen-md.png)
 
 ---
 

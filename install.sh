@@ -1,15 +1,27 @@
 #!/usr/bin/env bash
 # preen installer — set up glow + delta + fzf and the roost theme on a new machine.
 #
+#   curl -fsSL https://raw.githubusercontent.com/beatzball/preen/main/install.sh | bash
 #   ./install.sh              install everything
 #   ./install.sh --dry-run    print what it would do, change nothing
 #   ./install.sh --no-deps    skip package installs, do config only
 #   ./install.sh --user       always install tools into ~/.local/bin (no sudo)
+#   ./install.sh --dir DIR    where to clone preen (default ~/.local/share/preen)
 #   ./install.sh --prefix DIR where to link preen (default ~/.local/bin)
 #   ./install.sh --uninstall  undo the config and the link (keeps the packages)
 set -uo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_URL="${PREEN_REPO_URL:-https://github.com/beatzball/preen.git}"
+CLONE_DIR="${PREEN_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/preen}"
+
+# Piped from curl there is no script file, so BASH_SOURCE is empty or "bash".
+# In that case the checkout has to be fetched before anything can be installed.
+_src="${BASH_SOURCE[0]:-}"
+if [ -n "$_src" ] && [ -f "$_src" ]; then
+  REPO="$(cd "$(dirname "$_src")" && pwd)"
+else
+  REPO=""
+fi
 PREFIX="${PREEN_PREFIX:-$HOME/.local/bin}"
 GLOW_STYLE_DIR="$HOME/.config/glow"
 GLOW_STYLE="$GLOW_STYLE_DIR/roost.json"
@@ -40,11 +52,30 @@ while [ $# -gt 0 ]; do
     --user)      USER_ONLY=1 ;;
     --uninstall) UNINSTALL=1 ;;
     --prefix)    shift; PREFIX="${1:?--prefix needs a directory}" ;;
-    -h|--help)   sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --dir)       shift; CLONE_DIR="${1:?--dir needs a directory}"; REPO="" ;;
+    -h|--help)   sed -n '2,11p' "${BASH_SOURCE[0]:-$0}" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)           die "unknown option: $1 (try --help)" ;;
   esac
   shift
 done
+
+# ---- bootstrap: make sure we have a checkout to install from -----------------
+if [ "$UNINSTALL" = 0 ] && { [ -z "$REPO" ] || [ ! -x "$REPO/bin/preen" ]; }; then
+  head_ "Checkout"
+  if [ -x "$CLONE_DIR/bin/preen" ]; then
+    ok "already cloned: $CLONE_DIR"
+    run git -C "$CLONE_DIR" pull --ff-only --quiet || warn "could not update; keeping what is there"
+  else
+    command -v git >/dev/null 2>&1 || die "git is required to clone preen"
+    run mkdir -p "$(dirname "$CLONE_DIR")"
+    if run git clone --quiet "$REPO_URL" "$CLONE_DIR"; then
+      ok "cloned $REPO_URL -> $CLONE_DIR"
+    else
+      die "could not clone $REPO_URL (private repo? try: gh repo clone beatzball/preen)"
+    fi
+  fi
+  REPO="$CLONE_DIR"
+fi
 
 # ---- platform ---------------------------------------------------------------
 OS="$(uname -s)"

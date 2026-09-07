@@ -12,8 +12,10 @@ die() { printf 'preen: %s\n' "$*" >&2; exit 1; }
 # ---- render one file, no fzf -------------------------------------------------
 # glow 3 keeps its colours when stdout is a pipe, which is what fzf hands a
 # preview. glow 2 silently drops them, so install.sh requires 3.0.0 or newer.
+# stdin must be /dev/null: glow reads the file by name, but still blocks on an
+# open stdin, which leaves a preview hanging on "Loading ...".
 render_md() {
-  glow -s "$GLOW_STYLE" -w "${1:-$(tput cols 2>/dev/null || echo 80)}" "$2"
+  glow -s "$GLOW_STYLE" -w "${1:-$(tput cols 2>/dev/null || echo 80)}" "$2" </dev/null
 }
 
 render_diff() {

@@ -21,11 +21,20 @@ Thin glue over three tools that already do the hard part:
 ## Install
 
 ```sh
-git clone <this repo> preen && cd preen && ./install.sh
+curl -fsSL https://raw.githubusercontent.com/beatzball/preen/main/install.sh | bash
+```
+
+That clones preen to `~/.local/share/preen` and links `preen` into
+`~/.local/bin`. While the repo is **private** that URL returns 404; clone it
+with an authenticated client first:
+
+```sh
+gh repo clone beatzball/preen && ./preen/install.sh
 ```
 
 The installer is safe to run again. It:
 
+0. clones the repo if it is not already running from a checkout,
 1. installs `glow`, `delta` and `fzf` if they are missing,
 2. copies `themes/glow-roost.json` to `~/.config/glow/roost.json`,
 3. writes the delta theme into `~/.gitconfig` (backed up first, once),
@@ -39,6 +48,7 @@ The installer is safe to run again. It:
 | `--dry-run` | print every step, change nothing |
 | `--no-deps` | config only, install no packages |
 | `--user` | always fetch tools into `~/.local/bin`, never use sudo |
+| `--dir DIR` | clone preen somewhere else (default `~/.local/share/preen`) |
 | `--prefix DIR` | link `preen` somewhere else |
 | `--uninstall` | undo the theme, the link and the config |
 
