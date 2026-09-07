@@ -71,9 +71,29 @@ plain delta setup rather than this theme. It never removes packages.
 preen                 # auto: diffs in a git repo, else markdown
 preen md [DIR]        # browse markdown files under DIR (default .)
 preen diff [REV]      # browse files changed vs REV (default: working tree)
+preen pr [NUMBER]     # browse the files in a GitHub PR (default: this branch)
 preen FILE.md         # render one file and quit
 preen --help
 ```
+
+### Pull requests
+
+```sh
+preen pr 42           # review PR 42
+preen pr              # the PR opened from the current branch
+```
+
+Same picker as `preen diff`: file list on the left, delta diff on the right,
+`ctrl-s` to flip layout, `enter` for the full file in a pager.
+
+It needs the [`gh`](https://cli.github.com) CLI and a logged-in account
+(`gh auth login`). It is **read-only**: the diff comes over the API, so there is
+no checkout, no fetch, no branch switch and no stash. Your working tree is left
+exactly as it was.
+
+`gh pr diff` is called once for the whole PR and cached for the life of the
+run. Each preview slices its own file out of that cache, so a 90-file PR still
+costs one network call, not ninety.
 
 ### Pipes
 
@@ -114,7 +134,7 @@ before each file.
 
 | key | action |
 |---|---|
-| `ctrl-s` | toggle side-by-side / inline (diff mode) |
+| `ctrl-s` | toggle side-by-side / inline (diff and pr modes) |
 | `enter` | open the full render in a pager |
 | `ctrl-e` | open in `$EDITOR` |
 | `ctrl-d` / `ctrl-u` | scroll the preview 8 lines |

@@ -38,6 +38,37 @@ render_diff() {
 # the one delta invocation, shared by render_diff and the stdin path
 delta_pipe() { delta --features "$1" --paging=never --width "$2"; }
 
+# ---- pull requests -----------------------------------------------------------
+# "gh pr diff" is called once for the whole PR and cached in the state dir. A
+# preview slices its own file out of that cache, so browsing a PR costs one
+# network call, not one per file.
+# The header line is "diff --git a/PATH b/PATH"; match on the " b/PATH" tail so
+# a path that itself contains " b/" does not confuse the split.
+pr_slice() {
+  awk -v f="$1" '
+    /^diff --git / {
+      tail = " b/" f
+      inblk = (substr($0, length($0) - length(tail) + 1) == tail)
+    }
+    inblk { print }
+  ' "$2"
+}
+
+# "gh pr view" with no number resolves the PR of the current branch. Bash 3.2
+# trips on "$@" with no positional args under set -u, hence the two calls.
+pr_meta() {
+  if [ -n "$1" ]; then
+    gh pr view "$1" --json number,title -q '"\(.number)\t\(.title)"'
+  else
+    gh pr view --json number,title -q '"\(.number)\t\(.title)"'
+  fi
+}
+
+render_pr() {
+  local width="$1" file="$2" mode="$3" cache="$4"
+  pr_slice "$file" "$cache" | delta_pipe "$mode" "$width"
+}
+
 # ---- read from a pipe --------------------------------------------------------
 # "preen" with stdin on a pipe, or an explicit "preen -", renders whatever is
 # piped in and quits. A diff goes to delta, anything else to glow. Both keep
@@ -99,6 +130,9 @@ case "${1:-}" in
     kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
     if [ "$kind" = md ]; then
       render_md "$w" "$f"
+    elif [ "$kind" = pr ]; then
+      render_pr "$w" "$f" \
+        "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" "$PREEN_STATE/pr.diff"
     else
       render_diff "$w" "$f" \
         "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" \
@@ -110,6 +144,9 @@ case "${1:-}" in
     kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
     if [ "$kind" = md ]; then
       render_md "$w" "$f" | less -R
+    elif [ "$kind" = pr ]; then
+      render_pr "$w" "$f" \
+        "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" "$PREEN_STATE/pr.diff" | less -R
     else
       render_diff "$w" "$f" \
         "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" \
@@ -123,10 +160,11 @@ case "${1:-}" in
 esac
 
 # ---- pick a mode -------------------------------------------------------------
-KIND=""; REV=""
+KIND=""; REV=""; PR=""
 case "${1:-}" in
   md)   KIND=md;   shift; TARGET="${1:-.}" ;;
   diff) KIND=diff; shift; REV="${1:-}" ;;
+  pr)   KIND=pr;   shift; PR="${1:-}" ;;
   -h|--help)
     cat <<'H'
 preen — markdown and diffs in the terminal
@@ -134,9 +172,13 @@ preen — markdown and diffs in the terminal
   preen                 auto: diffs in a git repo, else markdown
   preen md [DIR]        browse markdown files under DIR (default .)
   preen diff [REV]      browse files changed vs REV (default: working tree)
+  preen pr [NUMBER]     browse the files in a GitHub PR (default: this branch)
   preen FILE.md         render one file and quit
   ... | preen           render piped input and quit
   preen - < FILE        the same, said out loud
+
+pr mode needs the gh CLI and never touches the working tree: it reads the
+PR diff over the network and shows it, with no checkout and no fetch.
 
 piped input picks its own renderer: a unified diff goes to delta, anything
 else goes to glow. On a terminal the result is paged through less -R; into a
@@ -147,7 +189,7 @@ keys inside the picker
   pgdn / pgup                scroll the preview half a page
   shift-down / shift-up      scroll the preview one line
   home / end                 jump the preview to top or bottom
-  ctrl-s   toggle side-by-side <-> inline (diff mode)
+  ctrl-s   toggle side-by-side <-> inline (diff and pr modes)
            start in inline with PREEN_LAYOUT=inline
   enter    open the full render in a pager
   ctrl-e   open in $EDITOR
@@ -169,12 +211,36 @@ fi
 command -v fzf >/dev/null || die "fzf is not installed"
 need_glow
 
+# ---- state shared with the fzf callbacks ------------------------------------
+# built before the file list because pr mode caches its diff in here
+PREEN_STATE="$(mktemp -d "${TMPDIR:-/tmp}/preen.XXXXXX")"
+trap 'rm -rf "$PREEN_STATE"' EXIT
+echo "$KIND" > "$PREEN_STATE/kind"
+case "${PREEN_LAYOUT:-sbs}" in inline) echo inline ;; *) echo sbs ;; esac > "$PREEN_STATE/mode"
+echo "$REV"  > "$PREEN_STATE/rev"
+export PREEN_STATE GLOW_STYLE
+
 # ---- build the file list -----------------------------------------------------
+LABEL=" preen · $KIND${REV:+ · $REV} "
 if [ "$KIND" = md ]; then
   command -v delta >/dev/null || true
   FILES="$(find "${TARGET:-.}" -type f \( -name '*.md' -o -name '*.markdown' \) \
             -not -path '*/.git/*' -not -path '*/node_modules/*' | sed 's|^\./||' | sort)"
   HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nenter render · ctrl-e edit · ctrl-/ hide · esc quit'
+elif [ "$KIND" = pr ]; then
+  # read-only: the PR is fetched over the API, never checked out, so the
+  # working tree and the current branch are left exactly as they are
+  command -v delta >/dev/null || die "delta is not installed"
+  command -v gh >/dev/null || die "gh is not installed; see https://cli.github.com"
+  gh auth status >/dev/null 2>&1 || die "not logged in to GitHub; run: gh auth login"
+  META="$(pr_meta "$PR" 2>&1)" \
+    || die "$(printf '%s\n' "$META" | grep -v '^$' | head -n 1)"
+  PRNUM="${META%%$'\t'*}"; PRTITLE="${META#*$'\t'}"
+  gh pr diff "$PRNUM" > "$PREEN_STATE/pr.diff" 2>"$PREEN_STATE/pr.err" \
+    || die "$(grep -v '^$' "$PREEN_STATE/pr.err" | head -n 1)"
+  FILES="$(gh pr diff "$PRNUM" --name-only 2>/dev/null)"
+  LABEL=" preen · pr #$PRNUM · $(printf '%s' "$PRTITLE" | cut -c1-60) "
+  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc quit'
 else
   command -v delta >/dev/null || die "delta is not installed"
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
@@ -194,19 +260,11 @@ fi
 FILES="$(printf '%s\n' "$FILES" | grep -v '^$')"
 [ -n "$FILES" ] || die "nothing to show ($KIND mode)"
 
-# ---- state shared with the fzf callbacks ------------------------------------
-PREEN_STATE="$(mktemp -d "${TMPDIR:-/tmp}/preen.XXXXXX")"
-trap 'rm -rf "$PREEN_STATE"' EXIT
-echo "$KIND" > "$PREEN_STATE/kind"
-case "${PREEN_LAYOUT:-sbs}" in inline) echo inline ;; *) echo sbs ;; esac > "$PREEN_STATE/mode"
-echo "$REV"  > "$PREEN_STATE/rev"
-export PREEN_STATE GLOW_STYLE
-
 printf '%s\n' "$FILES" | fzf \
   --ansi --no-multi --cycle \
   --layout=reverse \
   --border=rounded \
-  --border-label=" preen · $KIND${REV:+ · $REV} " \
+  --border-label="$LABEL" \
   --preview "$SELF --preview {}" \
   --preview-window 'right,65%,border-left' \
   --header "$HEADER" \
