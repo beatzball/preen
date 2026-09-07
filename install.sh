@@ -109,7 +109,18 @@ if [ "$UNINSTALL" = 1 ]; then
            line-numbers-right-style line-numbers-zero-style plus-style minus-style \
            plus-emph-style minus-emph-style zero-style true-color \
            sbs.side-by-side inline.side-by-side; do
-    git config --global --unset "delta.$k" 2>/dev/null && ok "unset delta.$k" || skip "delta.$k not set"
+    if [ -n "$(git config --global --get "delta.$k" 2>/dev/null)" ]; then
+      run git config --global --unset "delta.$k" && [ "$DRY" = 1 ] || ok "unset delta.$k"
+    else
+      skip "delta.$k not set"
+    fi
+  done
+  for k in alias.preen diff.tool difftool.preen.cmd difftool.prompt; do
+    if [ -n "$(git config --global --get "$k" 2>/dev/null)" ]; then
+      run git config --global --unset "$k" && [ "$DRY" = 1 ] || ok "unset $k"
+    else
+      skip "$k not set"
+    fi
   done
   [ -f "$GLOW_STYLE" ] && { run rm -f "$GLOW_STYLE"; ok "removed $GLOW_STYLE"; } || skip "no glow theme"
   [ -L "$PREFIX/preen" ] && { run rm -f "$PREFIX/preen"; ok "removed $PREFIX/preen"; } || skip "no preen link"
@@ -267,6 +278,15 @@ if have git; then
   gset delta.plus-emph-style                 "syntax #2d5a3d"
   gset delta.minus-emph-style                "syntax #5c2d3a"
   gset delta.zero-style                      "syntax"
+
+  # "git preen" and "git difftool -t preen". The alias needs the "!" so git runs
+  # it as a shell command instead of looking for a git-preen binary. The difftool
+  # command hands preen a plain unified diff on stdin, which preen sends to delta;
+  # preen pages it itself on a terminal, so no "| less -R" here.
+  gset alias.preen                           '!preen diff'
+  gset diff.tool                             "preen"
+  gset difftool.preen.cmd                    'diff -u "$LOCAL" "$REMOTE" | preen -'
+  gset difftool.prompt                       "false"
 fi
 
 # ---- link preen ---------------------------------------------------------------

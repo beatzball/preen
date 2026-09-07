@@ -8,6 +8,7 @@ GLOW_STYLE="${PREEN_GLOW_STYLE:-$HOME/.config/glow/roost.json}"
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 die() { printf 'preen: %s\n' "$*" >&2; exit 1; }
+glow_major() { glow --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p'; }
 
 # ---- render one file, no fzf -------------------------------------------------
 # glow 3 keeps its colours when stdout is a pipe, which is what fzf hands a
@@ -31,7 +32,64 @@ render_diff() {
     else
       git diff --color=always --cached -- "$file"   # repo with no commit yet
     fi
-  } | delta --features "$mode" --paging=never --width "$width"
+  } | delta_pipe "$mode" "$width"
+}
+
+# the one delta invocation, shared by render_diff and the stdin path
+delta_pipe() { delta --features "$1" --paging=never --width "$2"; }
+
+# ---- read from a pipe --------------------------------------------------------
+# "preen" with stdin on a pipe, or an explicit "preen -", renders whatever is
+# piped in and quits. A diff goes to delta, anything else to glow. Both keep
+# their colours when stdout is a pipe, so "| less -R" and "| head" still work.
+need_glow() {
+  command -v glow >/dev/null || die "glow is not installed"
+  [ "$(glow_major)" -ge 3 ] 2>/dev/null \
+    || die "glow 3 or newer is needed for coloured output (found: $(glow --version 2>/dev/null)); run install.sh"
+}
+
+layout_mode() {
+  case "${PREEN_LAYOUT:-sbs}" in inline) echo inline ;; *) echo sbs ;; esac
+}
+
+# git diff --color=always paints the headers, so strip CSI escapes before the
+# sniff or "^--- " never matches. BSD sed has no \x1b, hence the printf.
+strip_ansi() { sed "s/$(printf '\033')\[[0-9;]*[a-zA-Z]//g"; }
+
+# unified diff headers. "--- " alone is not enough: markdown uses it too, so
+# that pair only counts when "+++ " is there as well.
+looks_like_diff() {
+  local top; top="$(head -n 200 "$1" | strip_ansi)"
+  printf '%s\n' "$top" | grep -q '^diff --git ' && return 0
+  printf '%s\n' "$top" | grep -q '^@@ .* @@' && return 0
+  printf '%s\n' "$top" | grep -q '^--- ' \
+    && printf '%s\n' "$top" | grep -q '^+++ ' && return 0
+  return 1
+}
+
+# a terminal gets a pager, a pipe gets the bytes
+pager() { if [ -t 1 ]; then less -R; else cat; fi; }
+
+# PREEN_BUF and PREEN_BUFDIR are global on purpose: the EXIT trap runs after the
+# function has returned, so a "local" would already be out of scope and set -u
+# would trip.
+render_stdin() {
+  local width
+  # the buffer has to end in .md: glow 3 renders a file with any other
+  # extension as plain text, so stdin markdown came out unstyled
+  PREEN_BUFDIR="$(mktemp -d "${TMPDIR:-/tmp}/preen-stdin.XXXXXX")"
+  PREEN_BUF="$PREEN_BUFDIR/input.md"
+  trap 'rm -rf "$PREEN_BUFDIR"' EXIT
+  cat > "$PREEN_BUF"
+  [ -s "$PREEN_BUF" ] || die "nothing on stdin"
+  width="$(tput cols 2>/dev/null || echo 80)"
+  if looks_like_diff "$PREEN_BUF"; then
+    command -v delta >/dev/null || die "delta is not installed"
+    delta_pipe "$(layout_mode)" "$width" < "$PREEN_BUF" | pager
+  else
+    need_glow
+    render_md "$width" "$PREEN_BUF" | pager
+  fi
 }
 
 # ---- hooks fzf calls back into ----------------------------------------------
@@ -77,6 +135,12 @@ preen — markdown and diffs in the terminal
   preen md [DIR]        browse markdown files under DIR (default .)
   preen diff [REV]      browse files changed vs REV (default: working tree)
   preen FILE.md         render one file and quit
+  ... | preen           render piped input and quit
+  preen - < FILE        the same, said out loud
+
+piped input picks its own renderer: a unified diff goes to delta, anything
+else goes to glow. On a terminal the result is paged through less -R; into a
+pipe it is written plain, with the colour kept. PREEN_LAYOUT=inline applies.
 
 keys inside the picker
   ctrl-d / ctrl-u            scroll the preview 8 lines
@@ -91,7 +155,8 @@ keys inside the picker
   esc      quit
 H
     exit 0 ;;
-  "") ;;
+  -) render_stdin; exit 0 ;;
+  "") [ -t 0 ] || { render_stdin; exit 0; } ;;
   *)
     [ -f "$1" ] || die "no such file: $1"
     render_md "$(tput cols)" "$1"; exit 0 ;;
@@ -101,11 +166,8 @@ if [ -z "$KIND" ]; then
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 && KIND=diff || { KIND=md; TARGET=.; }
 fi
 
-command -v fzf  >/dev/null || die "fzf is not installed"
-command -v glow >/dev/null || die "glow is not installed"
-glow_major() { glow --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p'; }
-[ "$(glow_major)" -ge 3 ] 2>/dev/null \
-  || die "glow 3 or newer is needed for coloured previews (found: $(glow --version 2>/dev/null)); run install.sh"
+command -v fzf >/dev/null || die "fzf is not installed"
+need_glow
 
 # ---- build the file list -----------------------------------------------------
 if [ "$KIND" = md ]; then
