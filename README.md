@@ -72,6 +72,8 @@ preen                 # auto: diffs in a git repo, else markdown
 preen md [DIR]        # browse markdown files under DIR (default .)
 preen diff [REV]      # browse files changed vs REV (default: working tree)
 preen pr [NUMBER]     # browse the files in a GitHub PR (default: this branch)
+preen worktrees       # pick a git worktree, then browse what it changed
+preen wt              # short for the same
 preen FILE.md         # render one file and quit
 preen --help
 ```
@@ -94,6 +96,41 @@ exactly as it was.
 `gh pr diff` is called once for the whole PR and cached for the life of the
 run. Each preview slices its own file out of that cache, so a 90-file PR still
 costs one network call, not ninety.
+
+### Worktrees
+
+```sh
+preen worktrees       # or: preen wt
+```
+
+Agents work in git worktrees, and when one finishes the question is always
+"what did it actually change?". This mode answers it in two levels.
+
+First a picker of every worktree except the main checkout, one line each:
+
+```
+   1 file   worktree-cutoff           .claude/worktrees/cutoff
+   5 files  worktree-read-render      .claude/worktrees/read-render
+   6 files  worktree-rewire           .claude/worktrees/rewire
+```
+
+The preview shows the branch, the base it is measured against, the commits
+made on it, and the whole diff. Pick one and the normal file picker opens on
+that worktree: file list on the left, delta diff on the right, `ctrl-s` to flip
+layout, `enter` for the full file in a pager. `esc` goes back to the worktree
+list; `ctrl-c` quits.
+
+The count is files changed against the **merge-base** with the default branch,
+not against its tip, so commits landed on the default branch since the worktree
+branched do not show up. The default branch is read from `origin/HEAD`, falling
+back to `main` and then `master`. Uncommitted and untracked files are counted
+and browsable too.
+
+Like `pr` mode it is **read-only**: it runs `git worktree list`, `merge-base`,
+`log`, `diff` and `ls-files` and nothing else. No checkout, no fetch, no stash,
+no commit, in any worktree.
+
+A repo with no worktrees besides the main checkout says so and exits.
 
 ### Pipes
 
@@ -134,7 +171,7 @@ before each file.
 
 | key | action |
 |---|---|
-| `ctrl-s` | toggle side-by-side / inline (diff and pr modes) |
+| `ctrl-s` | toggle side-by-side / inline (diff, pr and worktrees modes) |
 | `enter` | open the full render in a pager |
 | `ctrl-e` | open in `$EDITOR` |
 | `ctrl-d` / `ctrl-u` | scroll the preview 8 lines |
@@ -142,7 +179,8 @@ before each file.
 | `shift-down` / `shift-up` | scroll the preview one line |
 | `home` / `end` | jump the preview to the top or bottom |
 | `ctrl-/` | hide or show the preview |
-| `esc` | quit |
+| `esc` | quit, or in worktrees mode go back one level |
+| `ctrl-c` | quit |
 
 ## Theming
 

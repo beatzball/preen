@@ -19,24 +19,114 @@ render_md() {
   glow -s "$GLOW_STYLE" -w "${1:-$(tput cols 2>/dev/null || echo 80)}" "$2" </dev/null
 }
 
+# git, optionally inside another worktree. An empty dir means "right here", so
+# every caller can pass one argument and stop thinking about it.
+gitw() {
+  local d="$1"; shift
+  if [ -n "$d" ]; then git -C "$d" "$@"; else git "$@"; fi
+}
+
 render_diff() {
-  local width="$1" file="$2" mode="$3" rev="$4"
+  local width="$1" file="$2" mode="$3" rev="$4" dir="${5:-}"
   {
-    if [ -n "$rev" ]; then
-      git diff --color=always "$rev" -- "$file"
-    elif ! git ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
+    if ! gitw "$dir" ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
       # untracked: show the whole file as an addition
-      git diff --no-index --color=always -- /dev/null "$file" 2>/dev/null
-    elif git rev-parse --verify -q HEAD >/dev/null 2>&1; then
-      git diff --color=always HEAD -- "$file"   # staged and unstaged together
+      gitw "$dir" diff --no-index --color=always -- /dev/null "$file" 2>/dev/null
+    elif [ -n "$rev" ]; then
+      gitw "$dir" diff --color=always "$rev" -- "$file"
+    elif gitw "$dir" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+      gitw "$dir" diff --color=always HEAD -- "$file"   # staged and unstaged together
     else
-      git diff --color=always --cached -- "$file"   # repo with no commit yet
+      gitw "$dir" diff --color=always --cached -- "$file"   # repo with no commit yet
     fi
   } | delta_pipe "$mode" "$width"
 }
 
 # the one delta invocation, shared by render_diff and the stdin path
 delta_pipe() { delta --features "$1" --paging=never --width "$2"; }
+
+# ---- worktrees ---------------------------------------------------------------
+# Agents work in git worktrees. This mode answers "what did each of them
+# change?" without touching any of them: every git call below only reads.
+
+# origin/HEAD names the default branch. Without it, fall back to main, then
+# master, local branch first and remote-tracking second.
+default_branch() {
+  local d="$1" ref c
+  ref="$(gitw "$d" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
+  [ -n "$ref" ] && { printf '%s\n' "$ref"; return 0; }
+  for c in main master; do
+    gitw "$d" rev-parse --verify -q "refs/heads/$c" >/dev/null 2>&1 \
+      && { printf '%s\n' "$c"; return 0; }
+    gitw "$d" rev-parse --verify -q "refs/remotes/origin/$c" >/dev/null 2>&1 \
+      && { printf '%s\n' "origin/$c"; return 0; }
+  done
+  return 1
+}
+
+# where the worktree left the default branch. Diffing against that, and not
+# against the tip, keeps later commits on the default branch out of the picture.
+wt_base() {
+  local d="$1" def
+  def="$(default_branch "$d")" || return 1
+  gitw "$d" merge-base "$def" HEAD 2>/dev/null
+}
+
+wt_branch() {
+  gitw "$1" symbolic-ref -q --short HEAD 2>/dev/null || printf 'detached\n'
+}
+
+# every path the worktree touches: committed since the base, still uncommitted,
+# or never added at all
+wt_files() {
+  local d="$1" base="$2"
+  {
+    if [ -n "$base" ]; then
+      gitw "$d" diff --name-only "$base"
+    else
+      gitw "$d" diff --name-only HEAD
+    fi
+    gitw "$d" ls-files --others --exclude-standard
+  } 2>/dev/null | grep -v '^$' | sort -u
+}
+
+# one line per worktree: a padded label for the eye, then a tab and the absolute
+# path for the callbacks. git always prints the main checkout first, and that is
+# not what this mode is about, so the first record becomes the root and is
+# dropped from the list. The count leads because the list pane is narrow and a
+# long path is the one column that can afford to run off the end.
+wt_list() {
+  git worktree list --porcelain 2>/dev/null \
+    | awk '/^worktree /{print substr($0, 10)}' \
+    | {
+        root=""
+        while IFS= read -r path; do
+          [ -n "$root" ] || { root="$path"; continue; }
+          base="$(wt_base "$path" 2>/dev/null)"
+          n="$(wt_files "$path" "$base" | wc -l | tr -d ' ')"
+          [ "$n" = 1 ] && word=file || word=files
+          printf '%4s %-5s  %-24s  %s\t%s\n' \
+            "$n" "$word" "$(wt_branch "$path")" "${path#"$root"/}" "$path"
+        done
+      }
+}
+
+# the level-one preview: what this worktree is, what it committed, what it changed
+render_wt() {
+  local w="$1" dir="$2" mode="$3" base def
+  def="$(default_branch "$dir" 2>/dev/null)" || def="?"
+  base="$(wt_base "$dir" 2>/dev/null)"
+  printf 'worktree  %s\n' "$dir"
+  printf 'branch    %s\n' "$(wt_branch "$dir")"
+  printf 'base      %s  (merge-base with %s)\n\n' "$(printf '%s' "${base:-none}" | cut -c1-12)" "$def"
+  if [ -n "$base" ]; then
+    gitw "$dir" log --color=always --oneline --no-decorate "$base..HEAD" 2>/dev/null
+    printf '\n'
+    gitw "$dir" diff --color=always "$base" 2>/dev/null | delta_pipe "$mode" "$w"
+  else
+    gitw "$dir" diff --color=always HEAD 2>/dev/null | delta_pipe "$mode" "$w"
+  fi
+}
 
 # ---- pull requests -----------------------------------------------------------
 # "gh pr diff" is called once for the whole PR and cached in the state dir. A
@@ -130,13 +220,18 @@ case "${1:-}" in
     kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
     if [ "$kind" = md ]; then
       render_md "$w" "$f"
+    elif [ "$kind" = wt ]; then
+      render_wt "$w" "$f" "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)"
+    elif [ "$kind" = none ]; then
+      printf '%s\n' "$f"
     elif [ "$kind" = pr ]; then
       render_pr "$w" "$f" \
         "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" "$PREEN_STATE/pr.diff"
     else
       render_diff "$w" "$f" \
         "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" \
-        "$(cat "$PREEN_STATE/rev"  2>/dev/null || echo '')"
+        "$(cat "$PREEN_STATE/rev"  2>/dev/null || echo '')" \
+        "$(cat "$PREEN_STATE/dir"  2>/dev/null || echo '')"
     fi
     exit 0 ;;
   --show)
@@ -144,13 +239,16 @@ case "${1:-}" in
     kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
     if [ "$kind" = md ]; then
       render_md "$w" "$f" | less -R
+    elif [ "$kind" = wt ]; then
+      render_wt "$w" "$f" "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" | less -R
     elif [ "$kind" = pr ]; then
       render_pr "$w" "$f" \
         "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" "$PREEN_STATE/pr.diff" | less -R
     else
       render_diff "$w" "$f" \
         "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" \
-        "$(cat "$PREEN_STATE/rev"  2>/dev/null || echo '')" | less -R
+        "$(cat "$PREEN_STATE/rev"  2>/dev/null || echo '')" \
+        "$(cat "$PREEN_STATE/dir"  2>/dev/null || echo '')" | less -R
     fi
     exit 0 ;;
   --toggle)
@@ -165,6 +263,7 @@ case "${1:-}" in
   md)   KIND=md;   shift; TARGET="${1:-.}" ;;
   diff) KIND=diff; shift; REV="${1:-}" ;;
   pr)   KIND=pr;   shift; PR="${1:-}" ;;
+  worktrees|wt) KIND=wt; shift ;;
   -h|--help)
     cat <<'H'
 preen — markdown and diffs in the terminal
@@ -173,12 +272,21 @@ preen — markdown and diffs in the terminal
   preen md [DIR]        browse markdown files under DIR (default .)
   preen diff [REV]      browse files changed vs REV (default: working tree)
   preen pr [NUMBER]     browse the files in a GitHub PR (default: this branch)
+  preen worktrees       pick a git worktree, then browse what it changed
+  preen wt              short for the same
   preen FILE.md         render one file and quit
   ... | preen           render piped input and quit
   preen - < FILE        the same, said out loud
 
 pr mode needs the gh CLI and never touches the working tree: it reads the
 PR diff over the network and shows it, with no checkout and no fetch.
+
+worktrees mode lists every worktree except the main checkout, with its branch
+and how many files it changed against the merge-base with the default branch
+(read from origin/HEAD, else main, else master). Uncommitted and untracked
+files are counted too. Pick one and the normal file picker opens on it; esc
+goes back to the worktree list, ctrl-c quits. It is read-only as well: no
+checkout, no fetch, no stash, nothing is written to any worktree.
 
 piped input picks its own renderer: a unified diff goes to delta, anything
 else goes to glow. On a terminal the result is paged through less -R; into a
@@ -189,12 +297,13 @@ keys inside the picker
   pgdn / pgup                scroll the preview half a page
   shift-down / shift-up      scroll the preview one line
   home / end                 jump the preview to top or bottom
-  ctrl-s   toggle side-by-side <-> inline (diff and pr modes)
+  ctrl-s   toggle side-by-side <-> inline (diff, pr and worktrees modes)
            start in inline with PREEN_LAYOUT=inline
   enter    open the full render in a pager
   ctrl-e   open in $EDITOR
   ctrl-/   hide or show the preview
-  esc      quit
+  esc      quit, or in worktrees mode go back one level
+  ctrl-c   quit
 H
     exit 0 ;;
   -) render_stdin; exit 0 ;;
@@ -218,11 +327,100 @@ trap 'rm -rf "$PREEN_STATE"' EXIT
 echo "$KIND" > "$PREEN_STATE/kind"
 case "${PREEN_LAYOUT:-sbs}" in inline) echo inline ;; *) echo sbs ;; esac > "$PREEN_STATE/mode"
 echo "$REV"  > "$PREEN_STATE/rev"
+: > "$PREEN_STATE/dir"          # empty: git runs here, not in another worktree
 export PREEN_STATE GLOW_STYLE
+
+# ---- the picker --------------------------------------------------------------
+# One fzf invocation for every mode and every level. The caller sets FILES,
+# LABEL, HEADER, PROMPT, WITH_NTH (which fields are shown), PICK (which field
+# the callbacks are handed), EDIT (what ctrl-e opens) and ENTER (what enter
+# does), so a second level costs a few variables rather than a second block.
+FILES=""; LABEL=""; HEADER=""; PROMPT='  file ❯ '
+WITH_NTH='..'; PICK='{}'; EDIT='{}'; ENTER=""
+
+run_picker() {
+  printf '%s\n' "$FILES" | fzf \
+    --ansi --no-multi --cycle \
+    --layout=reverse \
+    --border=rounded \
+    --border-label="$LABEL" \
+    --delimiter=$'\t' --with-nth="$WITH_NTH" \
+    --preview "$SELF --preview $PICK" \
+    --preview-window 'right,65%,border-left' \
+    --header "$HEADER" \
+    --prompt "$PROMPT" \
+    --pointer '▎' --marker ' ' \
+    --color 'fg:#c8c3e0,fg+:#e0dcf5,bg+:#2a2640,hl:#bd93f9,hl+:#bd93f9' \
+    --color 'border:#7c6ff0,label:#bd93f9,prompt:#7c6ff0,pointer:#bd93f9' \
+    --color 'header:#8a84b0,info:#8a84b0,spinner:#7c6ff0,marker:#3a3558' \
+    --bind "ctrl-s:execute-silent($SELF --toggle)+refresh-preview" \
+    --bind "enter:$ENTER" \
+    --bind "ctrl-e:execute(\${EDITOR:-vi} $EDIT)" \
+    --bind "ctrl-c:execute-silent(touch '$PREEN_STATE/quit')+abort" \
+    --bind 'ctrl-/:toggle-preview' \
+    --bind 'ctrl-d:preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down' \
+    --bind 'ctrl-u:preview-up+preview-up+preview-up+preview-up+preview-up+preview-up+preview-up+preview-up' \
+    --bind 'pgdn:preview-half-page-down' \
+    --bind 'pgup:preview-half-page-up' \
+    --bind 'shift-down:preview-down' \
+    --bind 'shift-up:preview-up' \
+    --bind 'home:preview-top' \
+    --bind 'end:preview-bottom'
+}
+
+# ---- worktrees: pick a worktree, then browse its diff -------------------------
+# Level one accepts, so the picked line comes back on stdout; level two uses
+# the same enter binding as diff mode. esc at level two falls out of the inner
+# picker and the loop paints level one again.
+wt_loop() {
+  local sel dir base branch
+  while :; do
+    echo wt > "$PREEN_STATE/kind"
+    : > "$PREEN_STATE/dir"; : > "$PREEN_STATE/rev"
+    FILES="$WTS"; WITH_NTH=1; PICK='{2}'; EDIT='{2}'; ENTER='accept'
+    LABEL=" preen · worktrees "
+    PROMPT='  worktree ❯ '
+    HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · esc quit'
+    sel="$(run_picker)"
+    [ -n "$sel" ] || return 0
+    [ -f "$PREEN_STATE/quit" ] && return 0
+
+    dir="${sel#*$'\t'}"
+    base="$(wt_base "$dir" 2>/dev/null)"
+    branch="$(wt_branch "$dir")"
+    FILES="$(wt_files "$dir" "$base")"
+    printf '%s' "$dir"  > "$PREEN_STATE/dir"
+    printf '%s' "$base" > "$PREEN_STATE/rev"
+    WITH_NTH='..'; PICK='{}'
+    LABEL=" preen · wt · $branch "
+    PROMPT='  file ❯ '
+    if [ -n "$FILES" ]; then
+      echo diff > "$PREEN_STATE/kind"
+      EDIT="\"$dir\"/{}"
+      ENTER="execute($SELF --show {})"
+      HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc back'
+    else
+      echo none > "$PREEN_STATE/kind"
+      FILES="$branch has changed nothing against its merge-base"
+      EDIT='{}'; ENTER='ignore'
+      HEADER='esc  back to the worktree list'
+    fi
+    run_picker >/dev/null
+    [ -f "$PREEN_STATE/quit" ] && return 0
+  done
+}
 
 # ---- build the file list -----------------------------------------------------
 LABEL=" preen · $KIND${REV:+ · $REV} "
-if [ "$KIND" = md ]; then
+if [ "$KIND" = wt ]; then
+  command -v delta >/dev/null || die "delta is not installed"
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
+  WTS="$(wt_list)"
+  [ -n "$WTS" ] \
+    || die "no worktrees besides the main checkout (see: git worktree list)"
+  wt_loop
+  exit 0
+elif [ "$KIND" = md ]; then
   command -v delta >/dev/null || true
   FILES="$(find "${TARGET:-.}" -type f \( -name '*.md' -o -name '*.markdown' \) \
             -not -path '*/.git/*' -not -path '*/node_modules/*' | sed 's|^\./||' | sort)"
@@ -260,29 +458,5 @@ fi
 FILES="$(printf '%s\n' "$FILES" | grep -v '^$')"
 [ -n "$FILES" ] || die "nothing to show ($KIND mode)"
 
-printf '%s\n' "$FILES" | fzf \
-  --ansi --no-multi --cycle \
-  --layout=reverse \
-  --border=rounded \
-  --border-label="$LABEL" \
-  --preview "$SELF --preview {}" \
-  --preview-window 'right,65%,border-left' \
-  --header "$HEADER" \
-  --prompt '  file ❯ ' \
-  --pointer '▎' --marker ' ' \
-  --color 'fg:#c8c3e0,fg+:#e0dcf5,bg+:#2a2640,hl:#bd93f9,hl+:#bd93f9' \
-  --color 'border:#7c6ff0,label:#bd93f9,prompt:#7c6ff0,pointer:#bd93f9' \
-  --color 'header:#8a84b0,info:#8a84b0,spinner:#7c6ff0,marker:#3a3558' \
-  --bind "ctrl-s:execute-silent($SELF --toggle)+refresh-preview" \
-  --bind "enter:execute($SELF --show {})" \
-  --bind "ctrl-e:execute(\${EDITOR:-vi} {})" \
-  --bind 'ctrl-/:toggle-preview' \
-  --bind 'ctrl-d:preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down' \
-  --bind 'ctrl-u:preview-up+preview-up+preview-up+preview-up+preview-up+preview-up+preview-up+preview-up' \
-  --bind 'pgdn:preview-half-page-down' \
-  --bind 'pgup:preview-half-page-up' \
-  --bind 'shift-down:preview-down' \
-  --bind 'shift-up:preview-up' \
-  --bind 'home:preview-top' \
-  --bind 'end:preview-bottom' \
-  >/dev/null
+ENTER="execute($SELF --show {})"
+run_picker >/dev/null
