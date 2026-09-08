@@ -4,11 +4,11 @@ Markdown and diffs in the terminal, without opening an editor.
 
 Birds preen to tidy their feathers. You preen your diff before you commit.
 
-![preen browsing a diff, then flipping between side-by-side and inline](demo/preen.gif)
+![preen picking a git worktree, then browsing what it changed](demo/preen.gif)
 
 Markdown mode, same keys:
 
-![preen rendering markdown](demo/preen-md.png)
+![preen rendering markdown files from a picker](demo/preen-md.png)
 
 Thin glue over three tools that already do the hard part:
 
@@ -142,7 +142,7 @@ git diff | preen           # delta renders it
 gh pr diff 42 | preen      # so does a PR diff
 cat NOTES.md | preen       # glow renders it
 preen - < NOTES.md         # the same, said out loud
-git diff | preen > out.txt # colour is kept in the file too
+git diff | preen > out.txt # color is kept in the file too
 ```
 
 It picks the renderer by sniffing the content: `diff --git`, `--- ` / `+++ ` or
@@ -150,7 +150,7 @@ It picks the renderer by sniffing the content: `diff --git`, `--- ` / `+++ ` or
 escapes first, so `git diff --color=always | preen` is still read as a diff.
 
 On a terminal the output is paged through `less -R`. Into a pipe or a file it
-is written plain, colour and all. `PREEN_LAYOUT=inline` applies here too.
+is written plain, color and all. `PREEN_LAYOUT=inline` applies here too.
 
 ### Git integration
 
@@ -205,23 +205,50 @@ The diff layout lives in two named delta features so `preen` can flip between th
 
 Keep `side-by-side` out of the main `[delta]` section. Options there beat feature options, and the toggle stops working.
 
-## Rebuilding the recording
+## Rebuilding the recordings
 
 ```sh
 brew install vhs
 ./demo/seed-repo.sh /tmp/preen-demo-repo
 vhs demo/preen.tape
+vhs demo/preen-pipes.tape
+vhs demo/preen-pr.tape
+vhs demo/preen-md.tape
 ```
 
-`demo/preen.tape` drives the whole thing and writes both `demo/preen.gif` and
-`demo/preen-md.png`.
+One tape per thing worth watching, so none of them runs long enough to lose you:
+
+| tape | writes | shows |
+|---|---|---|
+| `demo/preen.tape` | `demo/preen.gif` | `preen worktrees`: pick a worktree, open its files, `ctrl-s`, `esc` back |
+| `demo/preen-pipes.tape` | `demo/preen-pipes.gif` | `git diff \| preen`, then `cat docs/api.md \| preen` |
+| `demo/preen-pr.tape` | `demo/preen-pr.gif` | `preen pr 673` against a real public PR |
+| `demo/preen-md.tape` | `demo/preen-md.png` | the markdown picker |
+
+`seed-repo.sh` builds the whole stage in one directory: a dirty working tree, three
+git worktrees under `.worktrees/` with real commits on them, and a `.pr/` sandbox
+whose only content is a remote for PR numbers to resolve against. `.worktrees/`
+and `.pr/` are git-ignored, so they stay out of `preen diff`.
+
+`preen-pr.tape` needs `gh` and a logged-in account. It reads
+[charmbracelet/vhs#673](https://github.com/charmbracelet/vhs/pull/673) over the
+API and checks nothing out.
+
+Two things to keep in mind when editing a tape. Every `cd` and every `export`
+belongs between `Hide` and `Show`, so no real path reaches a frame. And
+`Screenshot` wants a path relative to the repo root plus a `Sleep` after it, or
+vhs writes nothing at all.
+
+`preen-pipes.tape` records a narrower frame than the rest on purpose: piped
+output is rendered 80 columns wide, so a wider one would only be empty on the
+right.
 
 ## Notes
 
-- **glow 3.0 or newer is required.** glow 2 throws away all colour when its
+- **glow 3.0 or newer is required.** glow 2 throws away all color when its
   output is not a terminal, and fzf hands previews a pipe, so every preview came
-  out grey. Wrapping glow in a pseudo-tty (`script`) fixed it under tmux but hung
-  forever inside fzf elsewhere. glow 3 keeps its colour in a pipe, so `preen`
+  out gray. Wrapping glow in a pseudo-tty (`script`) fixed it under tmux but hung
+  forever inside fzf elsewhere. glow 3 keeps its color in a pipe, so `preen`
   calls it directly and `install.sh` upgrades anything older.
 - Preview scrolling jumps; it is not animated. fzf has no timer or delay action,
   so a `--bind` chain of `preview-down` steps still paints one frame. Smooth

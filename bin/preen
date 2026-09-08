@@ -11,7 +11,7 @@ die() { printf 'preen: %s\n' "$*" >&2; exit 1; }
 glow_major() { glow --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p'; }
 
 # ---- render one file, no fzf -------------------------------------------------
-# glow 3 keeps its colours when stdout is a pipe, which is what fzf hands a
+# glow 3 keeps its colors when stdout is a pipe, which is what fzf hands a
 # preview. glow 2 silently drops them, so install.sh requires 3.0.0 or newer.
 # stdin must be /dev/null: glow reads the file by name, but still blocks on an
 # open stdin, which leaves a preview hanging on "Loading ...".
@@ -21,9 +21,24 @@ render_md() {
 
 # git, optionally inside another worktree. An empty dir means "right here", so
 # every caller can pass one argument and stop thinking about it.
+#
+# core.quotePath=false lives here rather than at the call sites. git escapes a
+# non-ASCII path by default, so "café.txt" comes back as "caf\303\251.txt" --
+# a name that gets counted and listed but cannot then be opened, giving a
+# blank preview. It has to be off for EVERY command that prints or accepts a
+# path, and setting it once here is the only way that stays true as call sites
+# are added.
+#
+# It does not cover everything: git always escapes a double quote, a backslash
+# and control characters whatever this is set to, so a filename containing one
+# is still broken. That needs -z and `read -d ""` at every path-output site.
 gitw() {
   local d="$1"; shift
-  if [ -n "$d" ]; then git -C "$d" "$@"; else git "$@"; fi
+  if [ -n "$d" ]; then
+    git -C "$d" -c core.quotePath=false "$@"
+  else
+    git -c core.quotePath=false "$@"
+  fi
 }
 
 render_diff() {
@@ -119,19 +134,31 @@ render_wt() {
   printf 'worktree  %s\n' "$dir"
   printf 'branch    %s\n' "$(wt_branch "$dir")"
   printf 'base      %s  (merge-base with %s)\n\n' "$(printf '%s' "${base:-none}" | cut -c1-12)" "$def"
-  if [ -n "$base" ]; then
-    gitw "$dir" log --color=always --oneline --no-decorate "$base..HEAD" 2>/dev/null
-    printf '\n'
-    gitw "$dir" diff --color=always "$base" 2>/dev/null | delta_pipe "$mode" "$w"
-  else
-    gitw "$dir" diff --color=always HEAD 2>/dev/null | delta_pipe "$mode" "$w"
-  fi
+  {
+    if [ -n "$base" ]; then
+      gitw "$dir" log --color=always --oneline --no-decorate "$base..HEAD" 2>/dev/null
+      printf '\n'
+      gitw "$dir" diff --color=always "$base" 2>/dev/null
+    else
+      gitw "$dir" diff --color=always HEAD 2>/dev/null
+    fi
+    # git diff never reports a file it has not been told about, but wt_files
+    # counts untracked ones -- so without this a worktree could say "2 files"
+    # and preview one. Each is shown whole, as an addition, exactly as the
+    # per-file view does it.
+    gitw "$dir" ls-files --others --exclude-standard 2>/dev/null |
+      while IFS= read -r u; do
+        [ -n "$u" ] || continue
+        gitw "$dir" diff --no-index --color=always -- /dev/null "$u" 2>/dev/null
+      done
+  } | delta_pipe "$mode" "$w"
 }
 
 # ---- pull requests -----------------------------------------------------------
-# "gh pr diff" is called once for the whole PR and cached in the state dir. A
-# preview slices its own file out of that cache, so browsing a PR costs one
-# network call, not one per file.
+# Starting a review costs four gh calls whatever the size of the PR: auth
+# status, pr view, and pr diff twice (the diff itself, then --name-only for the
+# file list). The diff is cached in the state dir and each preview slices its
+# own file out of it, so nothing goes to the network per file.
 # The header line is "diff --git a/PATH b/PATH"; match on the " b/PATH" tail so
 # a path that itself contains " b/" does not confuse the split.
 pr_slice() {
@@ -162,11 +189,11 @@ render_pr() {
 # ---- read from a pipe --------------------------------------------------------
 # "preen" with stdin on a pipe, or an explicit "preen -", renders whatever is
 # piped in and quits. A diff goes to delta, anything else to glow. Both keep
-# their colours when stdout is a pipe, so "| less -R" and "| head" still work.
+# their colors when stdout is a pipe, so "| less -R" and "| head" still work.
 need_glow() {
   command -v glow >/dev/null || die "glow is not installed"
   [ "$(glow_major)" -ge 3 ] 2>/dev/null \
-    || die "glow 3 or newer is needed for coloured output (found: $(glow --version 2>/dev/null)); run install.sh"
+    || die "glow 3 or newer is needed for colored output (found: $(glow --version 2>/dev/null)); run install.sh"
 }
 
 layout_mode() {
@@ -278,8 +305,9 @@ preen — markdown and diffs in the terminal
   ... | preen           render piped input and quit
   preen - < FILE        the same, said out loud
 
-pr mode needs the gh CLI and never touches the working tree: it reads the
-PR diff over the network and shows it, with no checkout and no fetch.
+pr mode needs the gh CLI. It reads the PR diff over the network and shows it,
+with no checkout, no fetch and no stash. The one key that reaches your
+checkout is ctrl-e, which opens your own copy of the file's path in $EDITOR.
 
 worktrees mode lists every worktree except the main checkout, with its branch
 and how many files it changed against the merge-base with the default branch
@@ -290,7 +318,7 @@ checkout, no fetch, no stash, nothing is written to any worktree.
 
 piped input picks its own renderer: a unified diff goes to delta, anything
 else goes to glow. On a terminal the result is paged through less -R; into a
-pipe it is written plain, with the colour kept. PREEN_LAYOUT=inline applies.
+pipe it is written plain, with the color kept. PREEN_LAYOUT=inline applies.
 
 keys inside the picker
   ctrl-d / ctrl-u            scroll the preview 8 lines
@@ -442,13 +470,20 @@ elif [ "$KIND" = pr ]; then
 else
   command -v delta >/dev/null || die "delta is not installed"
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
+  # Run from the repo root, not from wherever you happen to be standing.
+  # "git diff --name-only" always prints repo-root-relative paths, but
+  # "ls-files --others" prints them relative to the cwd, so from a subdirectory
+  # the list mixed two path styles -- and render_diff, which also ran git from
+  # the cwd, then previewed half of them as empty. Standing at the root makes
+  # both halves agree, and matches what "git preen" already does.
+  ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" && cd "$ROOT" || true
   if [ -n "$REV" ]; then
-    FILES="$(git diff --name-only "$REV")"
+    FILES="$(gitw "" diff --name-only "$REV")"
   else
     if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
-      FILES="$(git diff --name-only HEAD; git ls-files --others --exclude-standard)"
+      FILES="$(gitw "" diff --name-only HEAD; gitw "" ls-files --others --exclude-standard)"
     else
-      FILES="$(git diff --name-only --cached; git ls-files --others --exclude-standard)"
+      FILES="$(gitw "" diff --name-only --cached; gitw "" ls-files --others --exclude-standard)"
     fi
     FILES="$(printf '%s\n' "$FILES" | sort -u)"
   fi
