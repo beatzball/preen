@@ -1,0 +1,147 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  # preen is a bash script, so the cheapest useful check is that it parses.
+  # `bash -n` catches an unclosed quote or a broken heredoc, which is most of
+  # what actually goes wrong in a file this shape.
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse the shell
+        run: |
+          for f in bin/preen install.sh site/sync-assets.sh; do
+            bash -n "$f" && echo "ok  $f"
+          done
+          sh -n scripts/verify-site.sh && echo "ok  scripts/verify-site.sh"
+      - name: Help output runs
+        run: bin/preen --help > /dev/null && echo "ok  preen --help"
+      - name: Installer dry run changes nothing
+        run: ./install.sh --dry-run > /dev/null && echo "ok  install.sh --dry-run"
+
+  # The build is the real check on the site: it fails on a duplicate slug, a
+  # missing frontmatter title or a broken component, and it prerenders every
+  # route so a page that would 404 in production fails here instead.
+  site:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Every documented route was prerendered
+        run: |
+          for p in "" docs/getting-started docs/browsing docs/pipes \
+                   docs/pull-requests docs/worktrees docs/git-integration \
+                   docs/theming; do
+            f="dist/static/${p:+$p/}index.html"
+            test -f "$f" || { echo "missing: $f"; exit 1; }
+            echo "ok  /$p"
+          done
+
+  # Build the exact image Coolify deploys, run it, and probe it the same way
+  # verify-prod probes production. Catches "the site builds" vs "the container
+  # actually serves it" — two different claims.
+  smoke-image:
+    runs-on: ubuntu-latest
+    needs: [site]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./site
+          load: true
+          tags: preen-docs:ci
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Run container
+        run: docker run -d --rm -p 8080:80 --name preen-docs-smoke preen-docs:ci
+      - name: Probe container
+        env:
+          # Asserts the image really baked GIT_SHA into /version.json, so the
+          # production probe below can rely on that signal.
+          PREEN_EXPECT_COMMIT: ${{ github.sha }}
+          PREEN_PROBE_RETRIES: '15'
+          PREEN_PROBE_DELAY: '2'
+        run: sh scripts/verify-site.sh http://localhost:8080
+      - name: Container logs
+        if: always()
+        run: docker logs preen-docs-smoke || true
+      - name: Stop container
+        if: always()
+        run: docker stop preen-docs-smoke || true
+
+  # Deploy only when a push to main actually changed the site. A change to
+  # bin/preen or the installer cannot alter what preening.dev serves, so it
+  # should not spend a build. (No-op until the Coolify secret is configured.)
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [shell, site, smoke-image]
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.gate.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 2 }
+      - name: Did this push touch the site?
+        id: gate
+        run: |
+          if git rev-parse HEAD~1 >/dev/null 2>&1 &&
+             git diff --quiet HEAD~1 HEAD -- site/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "site/ unchanged — skipping deploy."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "site/ changed — deploying."
+          fi
+      - name: Trigger Coolify deploy
+        if: steps.gate.outputs.changed == 'true'
+        env:
+          COOLIFY_WEBHOOK_URL: ${{ secrets.COOLIFY_WEBHOOK_URL }}
+          COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+        run: |
+          if [ -z "$COOLIFY_WEBHOOK_URL" ]; then
+            echo "COOLIFY_WEBHOOK_URL not set — skipping deploy."
+            exit 0
+          fi
+          curl -fSsL -X POST \
+            -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+            "$COOLIFY_WEBHOOK_URL"
+
+  # Probe the live site after a deploy. The webhook only QUEUES a build, so
+  # this must wait for the new commit to actually be serving —
+  # PREEN_EXPECT_COMMIT makes the probe retry until /version.json reports this
+  # exact SHA. Without it the probe passes against the previous container and a
+  # failed deploy looks green.
+  verify-prod:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy.outputs.changed == 'true'
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe production
+        env:
+          PREEN_EXPECT_COMMIT: ${{ github.sha }}
+          # Coolify builds the image before swapping the container, so allow a
+          # cold, uncached build: 60 x 10s = 10 minutes.
+          PREEN_PROBE_RETRIES: '60'
+          PREEN_PROBE_DELAY: '10'
+        run: |
+          if [ -z "${{ vars.PROD_BASE_URL }}" ]; then
+            echo "PROD_BASE_URL not set — skipping production probe."
+            exit 0
+          fi
+          sh scripts/verify-site.sh "${{ vars.PROD_BASE_URL }}"

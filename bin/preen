@@ -11,7 +11,7 @@ die() { printf 'preen: %s\n' "$*" >&2; exit 1; }
 glow_major() { glow --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p'; }
 
 # ---- render one file, no fzf -------------------------------------------------
-# glow 3 keeps its colours when stdout is a pipe, which is what fzf hands a
+# glow 3 keeps its colors when stdout is a pipe, which is what fzf hands a
 # preview. glow 2 silently drops them, so install.sh requires 3.0.0 or newer.
 # stdin must be /dev/null: glow reads the file by name, but still blocks on an
 # open stdin, which leaves a preview hanging on "Loading ...".
@@ -162,11 +162,11 @@ render_pr() {
 # ---- read from a pipe --------------------------------------------------------
 # "preen" with stdin on a pipe, or an explicit "preen -", renders whatever is
 # piped in and quits. A diff goes to delta, anything else to glow. Both keep
-# their colours when stdout is a pipe, so "| less -R" and "| head" still work.
+# their colors when stdout is a pipe, so "| less -R" and "| head" still work.
 need_glow() {
   command -v glow >/dev/null || die "glow is not installed"
   [ "$(glow_major)" -ge 3 ] 2>/dev/null \
-    || die "glow 3 or newer is needed for coloured output (found: $(glow --version 2>/dev/null)); run install.sh"
+    || die "glow 3 or newer is needed for colored output (found: $(glow --version 2>/dev/null)); run install.sh"
 }
 
 layout_mode() {
@@ -290,7 +290,7 @@ checkout, no fetch, no stash, nothing is written to any worktree.
 
 piped input picks its own renderer: a unified diff goes to delta, anything
 else goes to glow. On a terminal the result is paged through less -R; into a
-pipe it is written plain, with the colour kept. PREEN_LAYOUT=inline applies.
+pipe it is written plain, with the color kept. PREEN_LAYOUT=inline applies.
 
 keys inside the picker
   ctrl-d / ctrl-u            scroll the preview 8 lines
