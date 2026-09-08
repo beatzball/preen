@@ -103,10 +103,17 @@ EOF
 # working deploy from a broken one -- that is exactly how a client bundle
 # importing a Node builtin shipped green once already.
 #
-# The tokens are deliberately PROSE from the page, not element names. An empty
-# custom element still puts <page-docs-slug> in the document, so matching on
-# that would pass a page that rendered nothing inside it. A sentence can only
-# be there if the content was actually rendered into the markup.
+# The tokens are RENDERED MARKUP, and that shape is load-bearing twice over.
+#
+# Not an element name: an empty custom element still puts <page-docs-slug> in
+# the document, so that would pass a page that rendered nothing inside it.
+#
+# And not bare prose either: the same text is carried in the page's JSON data
+# island, where quotes come out escaped as id=\"...\". Matching a sentence
+# would therefore pass on a document whose island survived but whose markup
+# never rendered. `<h2 id="...">` appears only in the real thing -- verified
+# against a built page, present in the rendered half and absent from the
+# island.
 #
 # This runs against production too, which the Playwright suite does not: that
 # drives `pnpm dev`, a different renderer from the static files nginx serves.
@@ -123,9 +130,11 @@ check_content() {
   done
   note "content ok  $path"
 }
-check_content /             'Built on three great tools' 'Get Started'
-check_content /docs/theming 'One palette, two renderers' 'Every environment variable' 'hljs-'
-check_content /docs/pipes   'How it picks a renderer'
+# Two headings per doc page, from the top and the bottom, so a truncated
+# render fails too.
+check_content /             '>Built on three great tools<' '>Get Started<'
+check_content /docs/theming '<h2 id="one-palette-two-renderers"' '<h2 id="every-environment-variable"' 'class="hljs '
+check_content /docs/pipes   '<h2 id="pipe-anything-in"' '<h2 id="where-this-is-already-wired-up-for-you"'
 
 # A 404 that returns 200 means try_files is misconfigured and every typo looks
 # like a real page.
