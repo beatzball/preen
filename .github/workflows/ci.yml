@@ -31,6 +31,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          # `defaults.run.working-directory` above applies to `run:` steps
+          # only, not to an action's inputs — without this the action looks for
+          # packageManager in a package.json at the repo root, which does not
+          # exist, and fails with "No pnpm version is specified".
+          package_json_file: site/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
