@@ -53,6 +53,7 @@ note() { printf '  %s\n' "$*"; }
 bad()  { printf '  x %s\n' "$*" >&2; fail=1; }
 
 status() { curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$1" 2>/dev/null || echo 000; }
+body()   { curl -s --max-time 20 "$1" 2>/dev/null; }
 
 # ---------------------------------------------------------------------------
 # 1. Wait for the expected commit (or just for the site to answer at all)
@@ -97,6 +98,27 @@ done <<EOF
 $PAGES
 $ASSETS
 EOF
+
+# A page that renders nothing still answers 200, so status alone cannot tell a
+# working deploy from a broken one -- that is exactly how a client bundle
+# importing a Node builtin shipped green once already. Assert the prerendered
+# markup is actually in the document: the page component, and for a doc page
+# the sidebar and a highlighted code block.
+#
+# This runs against production too, which the Playwright suite does not: that
+# drives `pnpm dev`, a different renderer from the static files nginx serves.
+check_content() {
+  path="$1"; want="$2"; html="$(body "$BASE$path")"
+  for token in $want; do
+    case "$html" in
+      *"$token"*) ;;
+      *) bad "$path is missing '$token' -- the page rendered empty"; return ;;
+    esac
+  done
+  note "content ok  $path"
+}
+check_content /              'page-home'
+check_content /docs/theming  'page-docs-slug starlight-sidebar hljs-'
 
 # A 404 that returns 200 means try_files is misconfigured and every typo looks
 # like a real page.
