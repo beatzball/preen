@@ -52,8 +52,8 @@ curl -fsSL https://raw.githubusercontent.com/beatzball/preen/main/install.sh | b
 That clones preen to `~/.local/share/preen` and links `preen` into
 `~/.local/bin`.
 
-While the repository is **private** that URL returns 404. Clone it with an
-authenticated client instead, then run the installer out of the checkout:
+Prefer to read it before running it? Clone first and run the installer out of
+the checkout — it behaves the same either way:
 
 ```sh
 gh repo clone beatzball/preen && ./preen/install.sh
