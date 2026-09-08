@@ -119,13 +119,24 @@ render_wt() {
   printf 'worktree  %s\n' "$dir"
   printf 'branch    %s\n' "$(wt_branch "$dir")"
   printf 'base      %s  (merge-base with %s)\n\n' "$(printf '%s' "${base:-none}" | cut -c1-12)" "$def"
-  if [ -n "$base" ]; then
-    gitw "$dir" log --color=always --oneline --no-decorate "$base..HEAD" 2>/dev/null
-    printf '\n'
-    gitw "$dir" diff --color=always "$base" 2>/dev/null | delta_pipe "$mode" "$w"
-  else
-    gitw "$dir" diff --color=always HEAD 2>/dev/null | delta_pipe "$mode" "$w"
-  fi
+  {
+    if [ -n "$base" ]; then
+      gitw "$dir" log --color=always --oneline --no-decorate "$base..HEAD" 2>/dev/null
+      printf '\n'
+      gitw "$dir" diff --color=always "$base" 2>/dev/null
+    else
+      gitw "$dir" diff --color=always HEAD 2>/dev/null
+    fi
+    # git diff never reports a file it has not been told about, but wt_files
+    # counts untracked ones -- so without this a worktree could say "2 files"
+    # and preview one. Each is shown whole, as an addition, exactly as the
+    # per-file view does it.
+    gitw "$dir" ls-files --others --exclude-standard 2>/dev/null |
+      while IFS= read -r u; do
+        [ -n "$u" ] || continue
+        gitw "$dir" diff --no-index --color=always -- /dev/null "$u" 2>/dev/null
+      done
+  } | delta_pipe "$mode" "$w"
 }
 
 # ---- pull requests -----------------------------------------------------------
@@ -442,6 +453,13 @@ elif [ "$KIND" = pr ]; then
 else
   command -v delta >/dev/null || die "delta is not installed"
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
+  # Run from the repo root, not from wherever you happen to be standing.
+  # "git diff --name-only" always prints repo-root-relative paths, but
+  # "ls-files --others" prints them relative to the cwd, so from a subdirectory
+  # the list mixed two path styles -- and render_diff, which also ran git from
+  # the cwd, then previewed half of them as empty. Standing at the root makes
+  # both halves agree, and matches what "git preen" already does.
+  ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" && cd "$ROOT" || true
   if [ -n "$REV" ]; then
     FILES="$(git diff --name-only "$REV")"
   else

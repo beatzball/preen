@@ -19,9 +19,16 @@ export const starlightHead = [
   '<link rel="icon" href="/favicon.ico" sizes="any" />',
   '<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />',
   '<link rel="apple-touch-icon" href="/apple-touch-icon.png" />',
-  '<link rel="stylesheet" href="/shoelace/themes/light.css" />',
+  // Only starlight.css is linked here.
+  //
+  // The Shoelace theme went with the components in app.ts — nothing renders an
+  // <sl-*> element, and this link blocked first paint for 19KB.
+  //
+  // highlight.css went because it never applied: every .hljs span lives inside
+  // page-docs-slug's shadow root, and a document stylesheet cannot reach in.
+  // The same theme is defined again, in the right place, in the component's
+  // own styles in pages/docs/[slug].ts.
   '<link rel="stylesheet" href="/styles/starlight.css" />',
-  '<link rel="stylesheet" href="/styles/highlight.css" />',
   '<script>(function(){',
   // Dark is the default: preen is a terminal tool and the site should look
   // like one on first visit. A stored choice always wins, so a reader who

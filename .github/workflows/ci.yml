@@ -39,7 +39,8 @@ jobs:
           package_json_file: site/package.json
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          # Matches site/Dockerfile, so CI and the deployed image agree.
+          node-version: '22'
           cache: pnpm
           cache-dependency-path: site/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
@@ -101,17 +102,31 @@ jobs:
       changed: ${{ steps.gate.outputs.changed }}
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 2 }
+        with: { fetch-depth: 0 }
       - name: Did this push touch the site?
         id: gate
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
-          if git rev-parse HEAD~1 >/dev/null 2>&1 &&
-             git diff --quiet HEAD~1 HEAD -- site/; then
+          # Compare against what main pointed at BEFORE this push, not HEAD~1.
+          # A push carries every commit since the last one — a merge, or three
+          # commits at once — and HEAD~1 sees only the last of them. A push
+          # whose final commit happens to miss site/ would then skip the deploy
+          # and report green, with the site changes sitting undeployed.
+          #
+          # github.event.before is all-zeroes for a new branch, and points at a
+          # discarded commit after a force-push. Both mean "cannot tell", and
+          # the safe answer to that is to deploy.
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] ||
+             ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "no usable before-commit ($BEFORE) — deploying to be safe."
+          elif git diff --quiet "$BEFORE" "$GITHUB_SHA" -- site/; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "site/ unchanged — skipping deploy."
+            echo "site/ unchanged across this push — skipping deploy."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "site/ changed — deploying."
+            echo "site/ changed across this push — deploying."
           fi
       - name: Trigger Coolify deploy
         if: steps.gate.outputs.changed == 'true'
@@ -119,11 +134,18 @@ jobs:
           COOLIFY_WEBHOOK_URL: ${{ secrets.COOLIFY_WEBHOOK_URL }}
           COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
         run: |
+          # Hard failure, not a skip. This step only runs on a push to main
+          # that changed site/, and the secrets are configured — so an unset
+          # one means somebody renamed or removed it, and silently passing
+          # would leave the site permanently undeployed while CI stayed green.
           if [ -z "$COOLIFY_WEBHOOK_URL" ]; then
-            echo "COOLIFY_WEBHOOK_URL not set — skipping deploy."
-            exit 0
+            echo "::error::COOLIFY_WEBHOOK_URL is not set. The site cannot deploy."
+            exit 1
           fi
-          curl -fSsL -X POST \
+          # No -L. Following a redirect re-sends the Authorization header to
+          # whatever host it points at, which would hand the token to a third
+          # party. The webhook URL is expected to answer directly.
+          curl -fSs -X POST \
             -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
             "$COOLIFY_WEBHOOK_URL"
 
@@ -147,7 +169,7 @@ jobs:
           PREEN_PROBE_DELAY: '10'
         run: |
           if [ -z "${{ vars.PROD_BASE_URL }}" ]; then
-            echo "PROD_BASE_URL not set — skipping production probe."
-            exit 0
+            echo "::error::PROD_BASE_URL is not set, so the deploy cannot be verified."
+            exit 1
           fi
           sh scripts/verify-site.sh "${{ vars.PROD_BASE_URL }}"

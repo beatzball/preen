@@ -78,9 +78,9 @@ Steps 3 to 5 are covered in [Theming](/docs/theming) and
 |---|---|
 | `--dry-run` | print every step, change nothing |
 | `--no-deps` | config only, install no packages |
-| `--user` | always fetch tools into `~/.local/bin`, never use sudo |
+| `--user` | always fetch tools into the prefix, never use sudo |
 | `--dir DIR` | clone preen somewhere else (default `~/.local/share/preen`) |
-| `--prefix DIR` | link `preen` somewhere else |
+| `--prefix DIR` | where `preen` is linked, and where any tool it has to fetch goes (default `~/.local/bin`) |
 | `--uninstall` | undo the theme, the git alias, the difftool, the link and the config |
 
 ### Which package manager it uses
@@ -96,12 +96,19 @@ in `~/.local/bin`. **No sudo is needed for that fallback path.**
 ./install.sh --uninstall
 ```
 
-That removes every `delta.*` theme key it wrote, plus `alias.preen`,
-`diff.tool`, `difftool.preen.cmd` and `difftool.prompt`.
+That removes:
+
+- the `delta.*` **theme** keys it wrote, plus `alias.preen`, `diff.tool`,
+  `difftool.preen.cmd` and `difftool.prompt`
+- `~/.config/glow/roost.json`, the glow style
+- the `preen` link in your prefix
 
 It deliberately **keeps** `core.pager`, `interactive.diffFilter`,
 `delta.navigate` and `delta.dark`, because those are a plain delta setup rather
-than anything preen added. It never removes packages.
+than anything preen added. It never removes packages, and it leaves
+`~/.gitconfig.preen.bak` — your pre-preen config — for you to delete.
+
+Details in [Git integration](/docs/git-integration).
 
 ## First run
 
@@ -127,7 +134,9 @@ preen FILE.md         # render one file and quit
 preen --help
 ```
 
-`esc` or `ctrl-c` gets you out of any of them.
+`ctrl-c` gets you out of any of them. So does `esc`, with one exception: in
+[worktrees](/docs/worktrees) mode `esc` goes back to the worktree list rather
+than quitting.
 
 ## Where to go next
 

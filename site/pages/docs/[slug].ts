@@ -1,3 +1,5 @@
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { html, css } from 'lit';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { customElement } from 'lit/decorators.js';
@@ -15,7 +17,8 @@ import { buildSeoHead, buildSeoTitle } from '../../src/seo.js';
 import '../../src/components/starlight-page.js';
 
 export interface DocPageData {
-  doc: Post;
+  /** Only what render() reads. See the note where this is built. */
+  doc: { title: string };
   body: string;
   toc: Array<{ depth: number; text: string; slug: string }>;
   sidebar: typeof siteConfig.sidebar;
@@ -51,24 +54,101 @@ function computePrevNext(
 }
 
 /**
- * Defer every image on the page except the first.
+ * Where public/ is, from whichever directory the build happens to run in.
  *
- * The recordings are by far the heaviest thing the site serves, and a doc page
- * often has one near the top and others further down that most readers never
- * scroll to. The first one is left eager: it usually sits above the fold and
- * is the thing the reader is waiting to see, and `loading="lazy"` on an
- * above-fold image delays it for no gain.
- *
- * Done here rather than in the Markdown so it holds for every page and every
- * image added later — Markdown image syntax cannot carry the attribute at all.
+ * dev runs from site/, the prerender pass can run from the repo root, and the
+ * server bundle sees a copy under dist/. Each candidate is tried rather than
+ * assumed; a miss is not fatal, the image just goes out without a size.
  */
-function lazyLoadAllButFirstImage(html: string): string {
+const PUBLIC_DIR = ['public', 'site/public', 'dist/server/public']
+  .map((d) => resolve(d))
+  .find((d) => existsSync(d)) ?? resolve('public');
+
+/**
+ * Read a WebP or PNG's pixel size straight out of its header.
+ *
+ * Only the intrinsic size is wanted, so decoding the image would be wasteful;
+ * both formats put the dimensions in the first few dozen bytes. Returns null
+ * for anything it does not recognise, and the caller then simply omits the
+ * attributes rather than guessing.
+ */
+function imageSize(file: string): { w: number; h: number } | null {
+  let buf: Buffer;
+  try {
+    buf = readFileSync(file);
+  } catch {
+    return null;
+  }
+
+  // PNG: IHDR is always the first chunk, width and height big-endian at 16.
+  if (buf.length > 24 && buf.toString('ascii', 1, 4) === 'PNG') {
+    return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+  }
+
+  if (buf.length > 30 && buf.toString('ascii', 0, 4) === 'RIFF' &&
+      buf.toString('ascii', 8, 12) === 'WEBP') {
+    const kind = buf.toString('ascii', 12, 16);
+    // VP8X is the extended header an animated file carries; canvas size is
+    // stored minus one, in three little-endian bytes each.
+    if (kind === 'VP8X') {
+      return {
+        w: (buf[24] | (buf[25] << 8) | (buf[26] << 16)) + 1,
+        h: (buf[27] | (buf[28] << 8) | (buf[29] << 16)) + 1,
+      };
+    }
+    if (kind === 'VP8 ') {
+      return { w: buf.readUInt16LE(26) & 0x3fff, h: buf.readUInt16LE(28) & 0x3fff };
+    }
+    // VP8L packs 14-bit width and height, each minus one, into four bytes.
+    if (kind === 'VP8L') {
+      const bits = buf.readUInt32LE(21);
+      return { w: (bits & 0x3fff) + 1, h: ((bits >> 14) & 0x3fff) + 1 };
+    }
+  }
+  return null;
+}
+
+/**
+ * Give every image in the rendered Markdown the attributes it cannot carry
+ * itself: an intrinsic size, and lazy loading below the first one.
+ *
+ * **width and height** are what stop the page jumping. Without them a
+ * Markdown image reserves no space, so every paragraph below it moves once
+ * the bytes arrive — /docs/pipes measured CLS 0.174 against Google's 0.1
+ * limit. The pair is only a ratio here, because the stylesheet sets
+ * `max-width:100%; height:auto`, so the browser reserves the right box at
+ * whatever width the column happens to be.
+ *
+ * **loading** is deferred on every image except the first. The recordings are
+ * the heaviest thing the site serves and a page often has one near the top
+ * and others most readers never scroll to. The first stays eager: it is
+ * usually above the fold and is the thing the reader is waiting for.
+ */
+function annotateImages(html: string): string {
   let seen = 0;
-  // The negative lookahead leaves alone any <img> that already says how it
-  // wants to load, so a hand-written tag in a page keeps its own answer.
-  return html.replace(/<img\b(?![^>]*\bloading=)/g, (tag) =>
-    ++seen === 1 ? tag : `${tag} loading="lazy" decoding="async"`,
-  );
+  return html.replace(/<img\b([^>]*)>/g, (tag, attrs: string) => {
+    // Count every image, including ones skipped below. Counting only the ones
+    // that get rewritten would make a hand-written eager <img> promote the
+    // NEXT image to "first" as well, and neither would be deferred.
+    const isFirst = ++seen === 1;
+    const add: string[] = [];
+
+    // Anchored to a quote or whitespace so `data-loading=` cannot match.
+    if (!isFirst && !/[\s"']loading\s*=/.test(' ' + attrs)) {
+      add.push('loading="lazy"', 'decoding="async"');
+    }
+
+    if (!/[\s"']width\s*=/.test(' ' + attrs) && !/[\s"']height\s*=/.test(' ' + attrs)) {
+      const src = /\ssrc\s*=\s*["']([^"']+)["']/.exec(attrs)?.[1];
+      // Site-root paths only: anything remote cannot be measured at build time.
+      if (src?.startsWith('/') && !src.startsWith('//')) {
+        const size = imageSize(resolve(PUBLIC_DIR, src.slice(1)));
+        if (size) add.push(`width="${size.w}"`, `height="${size.h}"`);
+      }
+    }
+
+    return add.length ? `<img${attrs} ${add.join(' ')}>` : tag;
+  });
 }
 
 export const pageData = definePageData(async (event) => {
@@ -102,7 +182,7 @@ export const pageData = definePageData(async (event) => {
   // skips highlighting altogether. Every code block renders unstyled and
   // nothing errors.
   const { applyHighlighting } = await import('../../src/highlight.js');
-  const body = lazyLoadAllButFirstImage(applyHighlighting(addHeadingIds(doc.body)));
+  const body = annotateImages(applyHighlighting(addHeadingIds(doc.body)));
   const { prevDoc, nextDoc } = computePrevNext(siteConfig.sidebar, slug);
   const title = doc.title || slug;
   const description = doc.description || siteConfig.description;
@@ -111,7 +191,11 @@ export const pageData = definePageData(async (event) => {
     : null;
 
   return {
-    doc,
+    // Only the title, not the whole doc. Returning `doc` sent doc.body (the
+    // un-highlighted HTML) and doc.rawBody (the Markdown source) into the
+    // page's JSON payload as well, so every doc page shipped its own content
+    // three times over — 11.5KB of a 20.4KB payload on getting-started.
+    doc: { title: doc.title || slug },
     body,
     toc,
     sidebar: siteConfig.sidebar,

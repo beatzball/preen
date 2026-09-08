@@ -25,8 +25,15 @@ looking for a `git-preen` binary on your `PATH`. A side effect worth knowing:
 git runs a `!` alias **from the repository root**, so `git preen` shows the
 whole repository no matter which subdirectory you happen to be standing in.
 
-That is usually what you want. If it is not, run `preen diff` directly — that
-one respects where you are.
+That is usually what you want, and `preen diff` does the same thing: it runs
+`git diff` without a path limit, so it also lists the whole repository
+whichever directory you start it in.
+
+**Both are unreliable from a subdirectory today.** Tracked paths come back
+relative to the repository root while untracked ones come back relative to
+where you are standing, so the two halves of the list disagree and a preview
+of a file outside your directory renders empty. Run either from the repository
+root until that is fixed.
 
 ## `git difftool`
 
@@ -68,6 +75,10 @@ backup with an already-modified file.
 ### The two entry points
 
 ```ini
+[core]
+    pager = delta
+[interactive]
+    diffFilter = delta --color-only
 [alias]
     preen = !preen diff
 [diff]
@@ -77,6 +88,10 @@ backup with an already-modified file.
 [difftool "preen"]
     cmd = diff -u "$LOCAL" "$REMOTE" | preen -
 ```
+
+Those first two are worth reading twice: **they change `git diff` and
+`git add -p` for every repository on the machine**, not just when you run
+preen. They are also the two `--uninstall` deliberately keeps — see below.
 
 ### The delta theme
 
@@ -126,9 +141,19 @@ stops doing anything at all. See [Theming](/docs/theming).
 ./install.sh --uninstall   # take the git config back out
 ```
 
-`--uninstall` removes every `delta.*` key the installer wrote, plus
-`alias.preen`, `diff.tool`, `difftool.preen.cmd` and `difftool.prompt`.
+`--uninstall` removes the `delta.*` **theme** keys, plus `alias.preen`,
+`diff.tool`, `difftool.preen.cmd` and `difftool.prompt`. It also deletes
+`~/.config/glow/roost.json` and the `preen` link in your prefix.
 
-It keeps `core.pager`, `interactive.diffFilter`, `delta.navigate` and
-`delta.dark`. Those four are a plain delta setup that works on its own, and
-they are as likely to be yours as preen's.
+It **keeps** four keys, and `delta.navigate` and `delta.dark` are `delta.*`
+keys among them, so "every `delta.*` key" would be wrong:
+
+| kept | why |
+|---|---|
+| `core.pager` | a plain delta setup that works without preen |
+| `interactive.diffFilter` | the same |
+| `delta.navigate` | the same |
+| `delta.dark` | the same |
+
+It never removes packages, and it leaves `~/.gitconfig.preen.bak` in place —
+that is your pre-preen config, so delete it yourself once you are sure.

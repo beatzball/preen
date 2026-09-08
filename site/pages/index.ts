@@ -33,7 +33,7 @@ const INSTALL_STEPS = [
 const MODES = [
   { cmd: 'preen diff', what: 'Browse what you have not committed. Staged and unstaged together.', href: '/docs/browsing' },
   { cmd: 'preen md', what: 'Browse every markdown file under a directory.', href: '/docs/browsing' },
-  { cmd: 'preen pr 42', what: 'Review a GitHub PR. No checkout, one network call.', href: '/docs/pull-requests' },
+  { cmd: 'preen pr 42', what: 'Review a GitHub PR. No checkout, and no fetch per file.', href: '/docs/pull-requests' },
   { cmd: 'preen wt', what: 'Pick a worktree and see what the agent changed.', href: '/docs/worktrees' },
   { cmd: 'git diff | preen', what: 'Pipe anything in. It works out which renderer to use.', href: '/docs/pipes' },
 ] as const;

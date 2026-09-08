@@ -37,6 +37,23 @@ export class StarlightHeader extends LitElement {
       align-items: center;
       padding: 0 var(--sl-content-pad-x, 1.5rem);
       gap: 1rem;
+      /* The page-level box-sizing:border-box reset is a document stylesheet
+         and does not cross into this shadow root, so without this line the
+         1.5rem padding is added on top of the row rather than taken out of
+         it. See beatzball/litro#137. */
+      box-sizing: border-box;
+    }
+
+    /* At 320px the row runs 13px past the viewport once the menu button is
+       there too: 48 padding + 36 button + 86 title + 58 nav + 82 actions + 48
+       gaps. Nothing here can wrap, so the whole page scrolls sideways. Buy the
+       room back from the padding and the gaps, which are the two parts nobody
+       misses at that width. */
+    @media (max-width: 22.5rem) {
+      header {
+        padding: 0 0.75rem;
+        gap: 0.5rem;
+      }
     }
 
     .menu-btn {

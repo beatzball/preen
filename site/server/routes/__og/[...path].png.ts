@@ -24,22 +24,35 @@ import { routes, pageModules } from '#litro/page-manifest';
  */
 const LOGO_SIZE = 64;
 
-/** Depth-first: the card is a small tree of `{ type, props: { children } }`. */
-function enlargeLogo(node: unknown, size: number): void {
-  if (!node || typeof node !== 'object') return;
+/**
+ * Depth-first over the card, which is a small tree of
+ * `{ type, props: { children } }`, resizing the FIRST img and stopping.
+ *
+ * Stopping matters. The logo is the only image the default template draws
+ * today, but if it ever gained a second one this would silently blow that up
+ * to 64x64 as well, and nothing would fail — the card would just look wrong.
+ *
+ * Returns true once it has done its one job, so the recursion unwinds.
+ */
+function enlargeFirstImage(node: unknown, size: number): boolean {
+  if (!node || typeof node !== 'object') return false;
   const n = node as { type?: string; props?: Record<string, unknown> };
   if (n.type === 'img' && n.props) {
     n.props.width = size;
     n.props.height = size;
+    return true;
   }
   const children = n.props?.children;
-  if (Array.isArray(children)) children.forEach((c) => enlargeLogo(c, size));
-  else if (children) enlargeLogo(children, size);
+  if (Array.isArray(children)) {
+    for (const c of children) if (enlargeFirstImage(c, size)) return true;
+    return false;
+  }
+  return children ? enlargeFirstImage(children, size) : false;
 }
 
 const template: OgTemplate = (input) => {
   const card = defaultOgTemplate(input);
-  enlargeLogo(card, LOGO_SIZE);
+  enlargeFirstImage(card, LOGO_SIZE);
   return card;
 };
 

@@ -85,18 +85,18 @@ done
 # ---------------------------------------------------------------------------
 # 2. Every page, and the assets the pages depend on
 # ---------------------------------------------------------------------------
-# Written to a file rather than piped: a `while read` in a pipeline runs in a
-# subshell, so `fail=1` set inside it would be thrown away and a broken page
-# would exit 0.
-tmp=$(mktemp)
-printf '%s\n%s\n' "$PAGES" "$ASSETS" | while IFS= read -r path; do
+# A `while read` fed by a pipe runs in a subshell, so a `fail=1` set inside it
+# is thrown away and a broken page exits 0. A here-doc redirect keeps the loop
+# in THIS shell, so the flag survives and no temp file or second grep is needed
+# to recover it.
+while IFS= read -r path; do
   [ -n "$path" ] || continue
   code=$(status "$BASE$path")
   if [ "$code" = "200" ]; then note "200  $path"; else bad "$code  $path"; fi
-done > "$tmp" 2>&1 || true
-cat "$tmp"
-grep -q '^  x ' "$tmp" && fail=1
-rm -f "$tmp"
+done <<EOF
+$PAGES
+$ASSETS
+EOF
 
 # A 404 that returns 200 means try_files is misconfigured and every typo looks
 # like a real page.

@@ -109,8 +109,20 @@ implemented** — setting that key does nothing at all.
 
 ## Every environment variable
 
+Read by `preen` itself:
+
 | variable | effect |
 |---|---|
 | `PREEN_GLOW_STYLE` | path to a glow style file (default `~/.config/glow/roost.json`) |
 | `PREEN_LAYOUT` | `inline` to start inline; anything else is side-by-side |
 | `EDITOR` | what `ctrl-e` opens (default `vi`) |
+| `TMPDIR` | where the scratch directory for a run is made (default `/tmp`) |
+
+Read by `install.sh`:
+
+| variable | effect |
+|---|---|
+| `PREEN_DIR` | where preen is cloned (same as `--dir`) |
+| `PREEN_PREFIX` | where `preen` is linked (same as `--prefix`) |
+| `PREEN_REPO_URL` | the repository to clone from |
+| `NO_COLOR` | set it to get plain, uncoloured installer output |

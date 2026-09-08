@@ -5,13 +5,15 @@ sidebar:
   order: 2
 ---
 
-## The three ways in
+## The ways in
 
 ```sh
 preen                 # auto: diffs in a git repo, else markdown
 preen md [DIR]        # browse markdown files under DIR (default .)
 preen diff [REV]      # browse files changed vs REV (default: working tree)
 preen FILE.md         # render one file and quit
+... | preen           # render piped input and quit
+preen - < FILE        # the same, said out loud
 ```
 
 `preen` with no argument asks git one question — *am I inside a work tree?* —
@@ -58,7 +60,9 @@ preen README.md
 No picker and no fzf: it renders the file and exits. Useful in a script, and
 useful when you already know which file you want.
 
-This path is for markdown only. To render a single **diff**, pipe it in — see
+**Any file is treated as markdown here**, whatever its extension. There is no
+check: `preen foo.py` hands the file to glow and you get mangled markdown
+rather than an error. To render a single **diff**, pipe it in instead — see
 [Pipes](/docs/pipes).
 
 ## Side-by-side or inline
@@ -100,8 +104,7 @@ and the list cycles at both ends.
 
 ### `enter` versus the preview
 
-The preview pane is a preview: it is 65% of the window and it does not scroll
-with your mouse. `enter` renders the same file at full terminal width into
+The preview pane is a preview: it is 65% of the window. `enter` renders the same file at full terminal width into
 `less -R`, which is where to read anything longer than a screen. `q` comes back
 to the picker.
 

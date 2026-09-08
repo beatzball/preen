@@ -16,8 +16,11 @@ export default defineNitroConfig({
     { dir: '../dist/client', baseURL: '/_litro/', maxAge: 31536000 },
     { dir: '../public',      baseURL: '/',        maxAge: 0 },
     { dir: '../content',     baseURL: '/content/', maxAge: 86400 },
-    { dir: '../node_modules/@shoelace-style/shoelace/dist/assets', baseURL: '/shoelace/assets/', maxAge: 604800 },
-    { dir: '../node_modules/@shoelace-style/shoelace/dist/themes', baseURL: '/shoelace/themes/', maxAge: 604800 },
+    // Shoelace's assets and themes are deliberately not served. No page on
+    // this site renders an <sl-*> element -- see the note in app.ts -- and
+    // mounting them copied 8.5MB of icons and stylesheets into the image and
+    // onto the CDN for nothing. Put both lines back alongside the component
+    // import if a page ever wants one.
   ],
 
   externals: { inline: ['@lit-labs/ssr', '@lit-labs/ssr-client', 'satori'] },

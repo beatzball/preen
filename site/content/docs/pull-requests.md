@@ -1,6 +1,6 @@
 ---
 title: Pull Requests
-description: Review a GitHub pull request without checking it out, in one network call.
+description: Review a GitHub pull request without checking it out, and without a network call per file.
 sidebar:
   order: 4
 ---
@@ -44,18 +44,27 @@ Your working tree, your index and your current branch are left exactly as they
 were. You can review a PR in the middle of your own half-finished work and
 nothing you have gets moved or hidden.
 
+**One exception, and it is yours to trigger:** `ctrl-e` opens the file in
+`$EDITOR`. It is handed the PR's path, so what opens is *your* copy of that
+path — or an empty new file, if the PR adds one you do not have. Nothing is
+written unless you write it, but this is the one key in `pr` mode that touches
+your checkout at all.
+
 This is the difference from `gh pr checkout`, which is the usual way to read a
 PR locally and which does move you.
 
-## One network call, not ninety
+## One diff fetch, not one per file
 
-`gh pr diff` is called **once** for the whole pull request, and the result is
-cached in a temporary directory for the life of the run.
+Starting a review costs **four** `gh` calls, whatever the size of the PR:
+`gh auth status`, `gh pr view` to resolve the number and title, and `gh pr
+diff` twice — once for the diff itself and once for `--name-only` to build the
+file list.
 
-Each preview then slices its own file out of that cache with a small `awk`
-pass. So a 90-file pull request costs one network call, not ninety — and
-arrow-keying down the file list is instant instead of waiting on the API at
-every step.
+The diff is then **cached** in a temporary directory for the life of the run,
+and each preview slices its own file out of that cache with a small `awk`
+pass. **That is the part that scales**: a 90-file pull request costs the same
+four calls as a one-file one, and arrow-keying down the list is instant
+instead of waiting on the API at every step.
 
 The cache is a scratch directory under `$TMPDIR`, created on start and removed
 when preen exits.
