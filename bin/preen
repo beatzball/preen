@@ -481,9 +481,9 @@ else
     FILES="$(gitw "" diff --name-only "$REV")"
   else
     if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
-      FILES="$(git diff --name-only HEAD; git ls-files --others --exclude-standard)"
+      FILES="$(gitw "" diff --name-only HEAD; gitw "" ls-files --others --exclude-standard)"
     else
-      FILES="$(git diff --name-only --cached; git ls-files --others --exclude-standard)"
+      FILES="$(gitw "" diff --name-only --cached; gitw "" ls-files --others --exclude-standard)"
     fi
     FILES="$(printf '%s\n' "$FILES" | sort -u)"
   fi

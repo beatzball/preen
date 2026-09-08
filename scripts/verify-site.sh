@@ -101,24 +101,31 @@ EOF
 
 # A page that renders nothing still answers 200, so status alone cannot tell a
 # working deploy from a broken one -- that is exactly how a client bundle
-# importing a Node builtin shipped green once already. Assert the prerendered
-# markup is actually in the document: the page component, and for a doc page
-# the sidebar and a highlighted code block.
+# importing a Node builtin shipped green once already.
+#
+# The tokens are deliberately PROSE from the page, not element names. An empty
+# custom element still puts <page-docs-slug> in the document, so matching on
+# that would pass a page that rendered nothing inside it. A sentence can only
+# be there if the content was actually rendered into the markup.
 #
 # This runs against production too, which the Playwright suite does not: that
 # drives `pnpm dev`, a different renderer from the static files nginx serves.
+# Tokens are passed as separate arguments, so a token can contain spaces --
+# which real prose does, and which is the whole point of using prose.
 check_content() {
-  path="$1"; want="$2"; html="$(body "$BASE$path")"
-  for token in $want; do
+  path="$1"; shift
+  html="$(body "$BASE$path")"
+  for token in "$@"; do
     case "$html" in
       *"$token"*) ;;
-      *) bad "$path is missing '$token' -- the page rendered empty"; return ;;
+      *) bad "$path is missing \"$token\" -- the page did not render"; return ;;
     esac
   done
   note "content ok  $path"
 }
-check_content /              'page-home'
-check_content /docs/theming  'page-docs-slug starlight-sidebar hljs-'
+check_content /             'Built on three great tools' 'Get Started'
+check_content /docs/theming 'One palette, two renderers' 'Every environment variable' 'hljs-'
+check_content /docs/pipes   'How it picks a renderer'
 
 # A 404 that returns 200 means try_files is misconfigured and every typo looks
 # like a real page.
