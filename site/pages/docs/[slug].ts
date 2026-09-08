@@ -1,5 +1,3 @@
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { html, css } from 'lit';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { customElement } from 'lit/decorators.js';
@@ -54,61 +52,6 @@ function computePrevNext(
 }
 
 /**
- * Where public/ is, from whichever directory the build happens to run in.
- *
- * dev runs from site/, the prerender pass can run from the repo root, and the
- * server bundle sees a copy under dist/. Each candidate is tried rather than
- * assumed; a miss is not fatal, the image just goes out without a size.
- */
-const PUBLIC_DIR = ['public', 'site/public', 'dist/server/public']
-  .map((d) => resolve(d))
-  .find((d) => existsSync(d)) ?? resolve('public');
-
-/**
- * Read a WebP or PNG's pixel size straight out of its header.
- *
- * Only the intrinsic size is wanted, so decoding the image would be wasteful;
- * both formats put the dimensions in the first few dozen bytes. Returns null
- * for anything it does not recognise, and the caller then simply omits the
- * attributes rather than guessing.
- */
-function imageSize(file: string): { w: number; h: number } | null {
-  let buf: Buffer;
-  try {
-    buf = readFileSync(file);
-  } catch {
-    return null;
-  }
-
-  // PNG: IHDR is always the first chunk, width and height big-endian at 16.
-  if (buf.length > 24 && buf.toString('ascii', 1, 4) === 'PNG') {
-    return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
-  }
-
-  if (buf.length > 30 && buf.toString('ascii', 0, 4) === 'RIFF' &&
-      buf.toString('ascii', 8, 12) === 'WEBP') {
-    const kind = buf.toString('ascii', 12, 16);
-    // VP8X is the extended header an animated file carries; canvas size is
-    // stored minus one, in three little-endian bytes each.
-    if (kind === 'VP8X') {
-      return {
-        w: (buf[24] | (buf[25] << 8) | (buf[26] << 16)) + 1,
-        h: (buf[27] | (buf[28] << 8) | (buf[29] << 16)) + 1,
-      };
-    }
-    if (kind === 'VP8 ') {
-      return { w: buf.readUInt16LE(26) & 0x3fff, h: buf.readUInt16LE(28) & 0x3fff };
-    }
-    // VP8L packs 14-bit width and height, each minus one, into four bytes.
-    if (kind === 'VP8L') {
-      const bits = buf.readUInt32LE(21);
-      return { w: (bits & 0x3fff) + 1, h: ((bits >> 14) & 0x3fff) + 1 };
-    }
-  }
-  return null;
-}
-
-/**
  * Give every image in the rendered Markdown the attributes it cannot carry
  * itself: an intrinsic size, and lazy loading below the first one.
  *
@@ -124,7 +67,7 @@ function imageSize(file: string): { w: number; h: number } | null {
  * and others most readers never scroll to. The first stays eager: it is
  * usually above the fold and is the thing the reader is waiting for.
  */
-function annotateImages(html: string): string {
+function annotateImages(html: string, sizeOf: (src: string) => { w: number; h: number } | null): string {
   let seen = 0;
   return html.replace(/<img\b([^>]*)>/g, (tag, attrs: string) => {
     // Count every image, including ones skipped below. Counting only the ones
@@ -142,7 +85,7 @@ function annotateImages(html: string): string {
       const src = /\ssrc\s*=\s*["']([^"']+)["']/.exec(attrs)?.[1];
       // Site-root paths only: anything remote cannot be measured at build time.
       if (src?.startsWith('/') && !src.startsWith('//')) {
-        const size = imageSize(resolve(PUBLIC_DIR, src.slice(1)));
+        const size = sizeOf(src);
         if (size) add.push(`width="${size.w}"`, `height="${size.h}"`);
       }
     }
@@ -182,7 +125,12 @@ export const pageData = definePageData(async (event) => {
   // skips highlighting altogether. Every code block renders unstyled and
   // nothing errors.
   const { applyHighlighting } = await import('../../src/highlight.js');
-  const body = annotateImages(applyHighlighting(addHeadingIds(doc.body)));
+  // src/image-size.ts reads node:fs. Imported at the top of this file those
+  // builtins land in the CLIENT bundle, where Vite externalises them with a
+  // warning rather than an error — the build passes and the doc page renders
+  // blank in the browser. Same dynamic-import treatment as highlighting.
+  const { imageSize } = await import('../../src/image-size.js');
+  const body = annotateImages(applyHighlighting(addHeadingIds(doc.body)), imageSize);
   const { prevDoc, nextDoc } = computePrevNext(siteConfig.sidebar, slug);
   const title = doc.title || slug;
   const description = doc.description || siteConfig.description;

@@ -31,7 +31,7 @@ render_diff() {
   {
     if ! gitw "$dir" ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
       # untracked: show the whole file as an addition
-      gitw "$dir" diff --no-index --color=always -- /dev/null "$file" 2>/dev/null
+      gitw "$dir" -c core.quotePath=false diff --no-index --color=always -- /dev/null "$file" 2>/dev/null
     elif [ -n "$rev" ]; then
       gitw "$dir" diff --color=always "$rev" -- "$file"
     elif gitw "$dir" rev-parse --verify -q HEAD >/dev/null 2>&1; then
@@ -86,7 +86,11 @@ wt_files() {
     else
       gitw "$d" diff --name-only HEAD
     fi
-    gitw "$d" ls-files --others --exclude-standard
+    # -c core.quotePath=false: git escapes a non-ASCII path by default, so an
+    # accented filename came back as "caf\303\251.txt" -- counted here, then
+    # unopenable in the preview, which is the same count/preview mismatch the
+    # untracked files used to cause.
+    gitw "$d" -c core.quotePath=false ls-files --others --exclude-standard
   } 2>/dev/null | grep -v '^$' | sort -u
 }
 
@@ -131,18 +135,19 @@ render_wt() {
     # counts untracked ones -- so without this a worktree could say "2 files"
     # and preview one. Each is shown whole, as an addition, exactly as the
     # per-file view does it.
-    gitw "$dir" ls-files --others --exclude-standard 2>/dev/null |
+    gitw "$dir" -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null |
       while IFS= read -r u; do
         [ -n "$u" ] || continue
-        gitw "$dir" diff --no-index --color=always -- /dev/null "$u" 2>/dev/null
+        gitw "$dir" -c core.quotePath=false diff --no-index --color=always -- /dev/null "$u" 2>/dev/null
       done
   } | delta_pipe "$mode" "$w"
 }
 
 # ---- pull requests -----------------------------------------------------------
-# "gh pr diff" is called once for the whole PR and cached in the state dir. A
-# preview slices its own file out of that cache, so browsing a PR costs one
-# network call, not one per file.
+# Starting a review costs four gh calls whatever the size of the PR: auth
+# status, pr view, and pr diff twice (the diff itself, then --name-only for the
+# file list). The diff is cached in the state dir and each preview slices its
+# own file out of it, so nothing goes to the network per file.
 # The header line is "diff --git a/PATH b/PATH"; match on the " b/PATH" tail so
 # a path that itself contains " b/" does not confuse the split.
 pr_slice() {
@@ -289,8 +294,9 @@ preen — markdown and diffs in the terminal
   ... | preen           render piped input and quit
   preen - < FILE        the same, said out loud
 
-pr mode needs the gh CLI and never touches the working tree: it reads the
-PR diff over the network and shows it, with no checkout and no fetch.
+pr mode needs the gh CLI. It reads the PR diff over the network and shows it,
+with no checkout, no fetch and no stash. The one key that reaches your
+checkout is ctrl-e, which opens your own copy of the file's path in $EDITOR.
 
 worktrees mode lists every worktree except the main checkout, with its branch
 and how many files it changed against the merge-base with the default branch
@@ -464,9 +470,9 @@ else
     FILES="$(git diff --name-only "$REV")"
   else
     if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
-      FILES="$(git diff --name-only HEAD; git ls-files --others --exclude-standard)"
+      FILES="$(git diff --name-only HEAD; git -c core.quotePath=false ls-files --others --exclude-standard)"
     else
-      FILES="$(git diff --name-only --cached; git ls-files --others --exclude-standard)"
+      FILES="$(git diff --name-only --cached; git -c core.quotePath=false ls-files --others --exclude-standard)"
     fi
     FILES="$(printf '%s\n' "$FILES" | sort -u)"
   fi

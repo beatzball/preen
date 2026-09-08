@@ -2,37 +2,47 @@ import { defineConfig } from 'vite';
 import litroContentPlugin from '@beatzball/litro/vite';
 
 /**
- * Keep highlight.js out of the client build entirely.
+ * Keep the server-only modules out of the client build entirely.
  *
- * pages/docs/[slug].ts imports src/highlight.ts dynamically, from inside its
- * pageData fetcher, so the browser never asks for the chunk. But Vite still
- * emits it: 921KB written into dist/, shipped in the Docker image and pushed
- * to the CDN, for code that only ever runs at build time. It is also a loaded
- * gun -- the emitted chunk keeps a real import, so if that fetcher were ever
- * to run client-side it would pull all ~190 language grammars down.
+ * pages/docs/[slug].ts imports both of these dynamically, from inside its
+ * pageData fetcher, so the browser never asks for either chunk. Vite still
+ * emits them.
+ *
+ * For src/highlight.ts that is 921KB written into dist/, shipped in the image
+ * and pushed to the CDN, for code that only ever runs at build time -- and a
+ * loaded gun, because the emitted chunk keeps a real import.
+ *
+ * For src/image-size.ts it is worse than waste: it reads node:fs, which Vite
+ * externalises for the browser with a warning rather than an error. The build
+ * still passes and the doc page renders blank.
  *
  * This config drives ONLY the client bundle (input app.ts, outDir
  * dist/client); the server is built separately by nitro and still gets the
  * real module. `apply: 'build'` keeps dev untouched.
  */
-function stubHighlightInClientBuild() {
+const SERVER_ONLY_STUBS: Record<string, string> = {
+  // Same shapes as the real modules, so anything that reaches for one still
+  // resolves and degrades to a no-op rather than throwing.
+  '/src/highlight.ts': 'export function applyHighlighting(html) { return html; }\n',
+  '/src/image-size.ts':
+    "export const PUBLIC_DIR = '';\nexport function imageSize() { return null; }\n",
+};
+
+function stubServerOnlyModulesInClientBuild() {
   return {
-    name: 'preen:stub-highlight-in-client',
+    name: 'preen:stub-server-only-in-client',
     apply: 'build' as const,
     enforce: 'pre' as const,
     load(id: string) {
-      if (id.replace(/\\/g, '/').endsWith('/src/highlight.ts')) {
-        // Same shape, so anything that reaches for it still type-checks and
-        // returns the markup untouched rather than throwing.
-        return 'export function applyHighlighting(html) { return html; }\n';
-      }
-      return null;
+      const path = id.replace(/\\/g, '/');
+      const hit = Object.keys(SERVER_ONLY_STUBS).find((s) => path.endsWith(s));
+      return hit ? SERVER_ONLY_STUBS[hit] : null;
     },
   };
 }
 
 export default defineConfig({
-  plugins: [stubHighlightInClientBuild(), litroContentPlugin()],
+  plugins: [stubServerOnlyModulesInClientBuild(), litroContentPlugin()],
   base: process.env.LITRO_BASE_PATH ? `${process.env.LITRO_BASE_PATH}/_litro/` : '/_litro/',
   resolve: {
     // NOTE: no 'source' condition. An installed package's TypeScript is

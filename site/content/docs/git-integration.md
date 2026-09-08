@@ -26,14 +26,8 @@ git runs a `!` alias **from the repository root**, so `git preen` shows the
 whole repository no matter which subdirectory you happen to be standing in.
 
 That is usually what you want, and `preen diff` does the same thing: it runs
-`git diff` without a path limit, so it also lists the whole repository
-whichever directory you start it in.
-
-**Both are unreliable from a subdirectory today.** Tracked paths come back
-relative to the repository root while untracked ones come back relative to
-where you are standing, so the two halves of the list disagree and a preview
-of a file outside your directory renders empty. Run either from the repository
-root until that is fixed.
+from the repository root too, so both list the whole repository whichever
+directory you start them in.
 
 ## `git difftool`
 

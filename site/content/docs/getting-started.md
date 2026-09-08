@@ -88,7 +88,8 @@ Steps 3 to 5 are covered in [Theming](/docs/theming) and
 It uses whichever of `brew`, `apt-get`, `dnf`, `pacman`, `zypper` or `apk` it
 finds. If your package manager has no package for one of the three tools, it
 falls back to that tool's official GitHub release tarball and drops the binary
-in `~/.local/bin`. **No sudo is needed for that fallback path.**
+in the prefix — `~/.local/bin` unless you passed `--prefix`. **No sudo is
+needed for that fallback path.**
 
 ### Uninstalling
 

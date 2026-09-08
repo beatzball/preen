@@ -45,6 +45,18 @@ jobs:
           cache-dependency-path: site/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # `pnpm build` alone is not enough. A page module that imports a Node
+      # builtin still builds -- Vite externalises it for the browser with a
+      # warning -- and the page then renders blank while still answering 200,
+      # so neither the build nor the HTTP probe notices. This is the check
+      # that catches it.
+      - name: Install Playwright chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: End-to-end
+        run: pnpm test:e2e
+      - name: Rebuild
+        # test:e2e runs `pnpm dev`, which clears dist/.
+        run: pnpm build
       - name: Every documented route was prerendered
         run: |
           for p in "" docs/getting-started docs/browsing docs/pipes \
@@ -93,7 +105,12 @@ jobs:
 
   # Deploy only when a push to main actually changed the site. A change to
   # bin/preen or the installer cannot alter what preening.dev serves, so it
-  # should not spend a build. (No-op until the Coolify secret is configured.)
+  # should not spend a build.
+  #
+  # This job FAILS if COOLIFY_WEBHOOK_URL, COOLIFY_API_TOKEN or PROD_BASE_URL
+  # is missing. That is deliberate -- a silent skip would leave the site
+  # permanently undeployed with CI green -- but it means all three have to
+  # exist before the first site change lands on main.
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [shell, site, smoke-image]
