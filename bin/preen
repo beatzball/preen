@@ -301,7 +301,7 @@ preen — markdown and diffs in the terminal
   preen pr [NUMBER]     browse the files in a GitHub PR (default: this branch)
   preen worktrees       pick a git worktree, then browse what it changed
   preen wt              short for the same
-  preen FILE.md         render one file and quit
+  preen FILE.md         render one file, paged, and quit
   ... | preen           render piped input and quit
   preen - < FILE        the same, said out loud
 
@@ -316,9 +316,10 @@ files are counted too. Pick one and the normal file picker opens on it; esc
 goes back to the worktree list, ctrl-c quits. It is read-only as well: no
 checkout, no fetch, no stash, nothing is written to any worktree.
 
-piped input picks its own renderer: a unified diff goes to delta, anything
-else goes to glow. On a terminal the result is paged through less -R; into a
-pipe it is written plain, with the color kept. PREEN_LAYOUT=inline applies.
+a named file and piped input both render and quit. A file always goes to
+glow; piped input picks its own renderer, a unified diff to delta and anything
+else to glow. On a terminal the result is paged through less -R; into a pipe it
+is written plain, with the color kept. PREEN_LAYOUT=inline applies to pipes.
 
 keys inside the picker
   ctrl-d / ctrl-u            scroll the preview 8 lines
@@ -338,7 +339,12 @@ H
   "") [ -t 0 ] || { render_stdin; exit 0; } ;;
   *)
     [ -f "$1" ] || die "no such file: $1"
-    render_md "$(tput cols)" "$1"; exit 0 ;;
+    need_glow
+    # Paged, exactly like piped input: a bare render exits the moment the last
+    # line is written, which closes a tmux pane opened just to read the file.
+    # pager() still writes plain bytes when stdout is not a terminal, so
+    # "preen FILE.md | head" is unchanged.
+    render_md "$(tput cols)" "$1" | pager; exit 0 ;;
 esac
 
 if [ -z "$KIND" ]; then

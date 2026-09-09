@@ -11,7 +11,7 @@ sidebar:
 preen                 # auto: diffs in a git repo, else markdown
 preen md [DIR]        # browse markdown files under DIR (default .)
 preen diff [REV]      # browse files changed vs REV (default: working tree)
-preen FILE.md         # render one file and quit
+preen FILE.md         # render one file, paged, and quit
 ... | preen           # render piped input and quit
 preen - < FILE        # the same, said out loud
 ```
@@ -57,8 +57,13 @@ With a **revision**, the list is exactly `git diff --name-only REV`.
 preen README.md
 ```
 
-No picker and no fzf: it renders the file and exits. Useful in a script, and
-useful when you already know which file you want.
+No picker and no fzf. On a terminal the render is paged through `less -R`, so
+it stays on screen until you press `q`. That matters in a split pane opened
+only to read a file: without a pager the command ends the moment the last line
+is written, and the pane closes with it.
+
+Into a pipe there is no pager, and the bytes are written plain with the color
+kept, so `preen NOTES.md | head` behaves.
 
 **Any file is treated as markdown here**, whatever its extension. There is no
 check: `preen foo.py` hands the file to glow and you get mangled markdown

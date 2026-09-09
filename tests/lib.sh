@@ -177,3 +177,37 @@ EOF
   export PATH
 fi
 trap 'rm -rf "$_preen_dep_shim"' EXIT
+
+# ---- running preen on a real terminal ---------------------------------------
+#
+# preen decides whether to page by asking `[ -t 1 ]`, so the paging tests need
+# stdout to be a terminal. A test harness has a pipe. `script` cannot help:
+# it wants a terminal on stdin too, which CI does not have either.
+#
+# So allocate a pty directly and hand the child its slave end. python3 is on
+# both the macOS and the ubuntu runners; if it is missing the tests fail loudly
+# rather than skipping, because a silently skipped paging test is the one that
+# lets this regress.
+
+with_tty() {
+  # with_tty <cmd> [args...] -> what the command wrote to a terminal
+  python3 - "$@" <<'PY'
+import os, pty, subprocess, sys
+master, slave = pty.openpty()
+p = subprocess.Popen(sys.argv[1:], stdin=subprocess.DEVNULL,
+                     stdout=slave, stderr=subprocess.DEVNULL)
+os.close(slave)
+out = b""
+try:
+    while True:
+        chunk = os.read(master, 65536)
+        if not chunk:
+            break
+        out += chunk
+except OSError:      # the pty raises EIO instead of EOF when the child exits
+    pass
+p.wait()
+sys.stdout.write(out.decode("utf-8", "replace"))
+sys.exit(p.returncode)
+PY
+}
