@@ -15,7 +15,9 @@ mark="$shim/pager"
 doc="$shim/note.md"
 # lib.sh sets its own EXIT trap for the glow version stub, and a second trap
 # would replace it rather than add to it, so remove both here.
-trap 'rm -rf "$shim" "${_preen_dep_shim:-}"' EXIT
+# $st is set later, by preen_state; naming it here is harmless while it is unset
+# and is what stops its directory leaking.
+trap 'rm -rf "$shim" "${_preen_dep_shim:-}" "${st:-}"' EXIT
 
 printf '# Notes\n\nA paragraph.\n' > "$doc"
 
@@ -99,8 +101,13 @@ assert_true $? "rendering one file exits 0"
 
 # ---- the picker's enter key --------------------------------------------------
 # --show is what fzf runs on enter, and it had its own four hard-coded `less -R`
-# calls. They go through pager() now, so the same two rules apply -- and without
-# this, reverting all four leaves the suite green.
+# calls, one per kind. They go through pager() now, so the same two rules apply.
+#
+# Only the md site is covered here -- the kind is read from $PREEN_STATE, and
+# driving the wt, pr and diff kinds needs their whole fixture. Reverting those
+# three alone leaves this file green. They are line-for-line identical to the md
+# one, and md is the site a person is most likely to edit, so this is a known
+# limit rather than an oversight.
 #
 # fzf binds it as execute($SELF --show {}), which hands the child the real
 # terminal, so the pty here is what that key press actually looks like.
