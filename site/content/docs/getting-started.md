@@ -131,7 +131,7 @@ preen diff [REV]      # browse files changed vs REV (default: working tree)
 preen pr [NUMBER]     # browse the files in a GitHub PR (default: this branch)
 preen worktrees       # pick a git worktree, then browse what it changed
 preen wt              # short for the same
-preen FILE.md         # render one file and quit
+preen FILE.md         # render one file, paged, and quit
 preen --help
 ```
 

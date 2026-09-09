@@ -5,9 +5,13 @@ tests/run.sh            # everything
 tests/run.sh worktrees  # only files whose name contains "worktrees"
 ```
 
-Plain bash, no framework. Needs `git`, `delta` and `fzf`. It does **not** need
-`glow` — nothing here asserts on glow's output, so `lib.sh` stubs the version
-check preen makes at startup and CI never installs it.
+Plain bash, no framework. Needs `git`, `delta`, `fzf` and `python3`. It does
+**not** need `glow` — nothing here asserts on glow's output, so `lib.sh` stubs
+the version check preen makes at startup and CI never installs it.
+
+`python3` is only for `with_tty`, which allocates a pty so the tests can reach
+the code preen runs on a terminal. `pager()` branches on `[ -t 1 ]`, and a test
+harness only ever offers a pipe, so there is no other way in.
 
 Every test builds a throwaway repository under `$TMPDIR` and removes it on
 exit. Nothing touches the checkout it runs from, which matters more than usual
@@ -42,8 +46,9 @@ green for the wrong reason.
 | `test-stdin.sh` | the diff/markdown sniff, including `---` alone staying markdown and a `--color=always` diff still reading as a diff |
 | `test-filenames.sh` | accented names, spaces, a leading dash, and the quote case from #3 as a known limit |
 | `test-pr.sh` | four `gh` calls whatever the file count, previews slice the cache, read-only |
+| `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
 
-## Three bugs these exist to hold shut
+## Four bugs these exist to hold shut
 
 Each was found by review, fixed, and is now covered. Reverting any one of the
 fixes turns this suite red:
@@ -54,6 +59,9 @@ fixes turns this suite red:
 - **A worktree's count and its preview disagreed** — untracked files were
   counted but not shown, so a worktree could say "2 files" and show one.
 - **Non-ASCII filenames** came back escaped, listed but unopenable.
+- **`preen FILE.md` was not paged**, so it exited the moment the last line was
+  written. A tmux pane opened only to read the file closed with it, which read
+  as glow never having run.
 
 ## Writing a new one
 

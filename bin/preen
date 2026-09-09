@@ -215,8 +215,12 @@ looks_like_diff() {
   return 1
 }
 
-# a terminal gets a pager, a pipe gets the bytes
-pager() { if [ -t 1 ]; then less -R; else cat; fi; }
+# a terminal gets a pager, a pipe gets the bytes. less is checked rather than
+# assumed: without it "less -R" writes nothing at all, which loses the whole
+# render to save a scrollback the terminal already keeps.
+pager() {
+  if [ -t 1 ] && command -v less >/dev/null; then less -R; else cat; fi
+}
 
 # PREEN_BUF and PREEN_BUFDIR are global on purpose: the EXIT trap runs after the
 # function has returned, so a "local" would already be out of scope and set -u
@@ -265,17 +269,17 @@ case "${1:-}" in
     f="$2"; w="$(tput cols)"
     kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
     if [ "$kind" = md ]; then
-      render_md "$w" "$f" | less -R
+      render_md "$w" "$f" | pager
     elif [ "$kind" = wt ]; then
-      render_wt "$w" "$f" "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" | less -R
+      render_wt "$w" "$f" "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" | pager
     elif [ "$kind" = pr ]; then
       render_pr "$w" "$f" \
-        "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" "$PREEN_STATE/pr.diff" | less -R
+        "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" "$PREEN_STATE/pr.diff" | pager
     else
       render_diff "$w" "$f" \
         "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" \
         "$(cat "$PREEN_STATE/rev"  2>/dev/null || echo '')" \
-        "$(cat "$PREEN_STATE/dir"  2>/dev/null || echo '')" | less -R
+        "$(cat "$PREEN_STATE/dir"  2>/dev/null || echo '')" | pager
     fi
     exit 0 ;;
   --toggle)
@@ -301,7 +305,7 @@ preen — markdown and diffs in the terminal
   preen pr [NUMBER]     browse the files in a GitHub PR (default: this branch)
   preen worktrees       pick a git worktree, then browse what it changed
   preen wt              short for the same
-  preen FILE.md         render one file and quit
+  preen FILE.md         render one file, paged, and quit
   ... | preen           render piped input and quit
   preen - < FILE        the same, said out loud
 
@@ -316,9 +320,11 @@ files are counted too. Pick one and the normal file picker opens on it; esc
 goes back to the worktree list, ctrl-c quits. It is read-only as well: no
 checkout, no fetch, no stash, nothing is written to any worktree.
 
-piped input picks its own renderer: a unified diff goes to delta, anything
-else goes to glow. On a terminal the result is paged through less -R; into a
-pipe it is written plain, with the color kept. PREEN_LAYOUT=inline applies.
+a named file and piped input are both paged through less -R on a terminal, so
+the render stays up until you press q. Into a pipe they are written plain, with
+the color kept. A file always goes to glow; piped input picks its own renderer,
+a unified diff to delta and anything else to glow. PREEN_LAYOUT=inline applies
+to pipes.
 
 keys inside the picker
   ctrl-d / ctrl-u            scroll the preview 8 lines
@@ -338,7 +344,12 @@ H
   "") [ -t 0 ] || { render_stdin; exit 0; } ;;
   *)
     [ -f "$1" ] || die "no such file: $1"
-    render_md "$(tput cols)" "$1"; exit 0 ;;
+    need_glow
+    # Paged, exactly like piped input: a bare render exits the moment the last
+    # line is written, which closes a tmux pane opened just to read the file.
+    # pager() still writes plain bytes when stdout is not a terminal, so
+    # "preen FILE.md | head" is unchanged.
+    render_md "$(tput cols)" "$1" | pager; exit 0 ;;
 esac
 
 if [ -z "$KIND" ]; then
