@@ -257,3 +257,7 @@ right.
   the payload into the pane title. `mdcat` was tested and dropped for this reason.
 - `demo/kitchen-sink.md` exercises every markdown feature. Use it to check a theme:
   `preen demo/kitchen-sink.md`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
