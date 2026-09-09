@@ -189,25 +189,43 @@ trap 'rm -rf "$_preen_dep_shim"' EXIT
 # rather than skipping, because a silently skipped paging test is the one that
 # lets this regress.
 
+# The timeout is not decoration. A pty stays readable while ANY process holds
+# the slave end, so one stray background child makes the read loop wait for
+# ever -- and the CI job it would hang in has no time limit of its own.
+PREEN_TTY_TIMEOUT="${PREEN_TTY_TIMEOUT:-30}"
+export PREEN_TTY_TIMEOUT
+
 with_tty() {
-  # with_tty <cmd> [args...] -> what the command wrote to a terminal
+  # with_tty <cmd> [args...] -> what the command wrote to a terminal.
+  # Exits 124 if the command outlived PREEN_TTY_TIMEOUT seconds.
   python3 - "$@" <<'PY'
-import os, pty, subprocess, sys
+import os, pty, select, subprocess, sys, time
+deadline = time.monotonic() + float(os.environ.get("PREEN_TTY_TIMEOUT", "30"))
 master, slave = pty.openpty()
 p = subprocess.Popen(sys.argv[1:], stdin=subprocess.DEVNULL,
                      stdout=slave, stderr=subprocess.DEVNULL)
 os.close(slave)
-out = b""
-try:
-    while True:
+out, timed_out = b"", False
+while True:
+    left = deadline - time.monotonic()
+    if left <= 0:
+        timed_out = True
+        break
+    if not select.select([master], [], [], left)[0]:
+        continue
+    try:
         chunk = os.read(master, 65536)
-        if not chunk:
-            break
-        out += chunk
-except OSError:      # the pty raises EIO instead of EOF when the child exits
-    pass
+    except OSError:  # the pty raises EIO instead of EOF when the child exits
+        break
+    if not chunk:
+        break
+    out += chunk
+os.close(master)
+if timed_out:
+    p.kill()
+    sys.stderr.write("with_tty: timed out\n")
 p.wait()
 sys.stdout.write(out.decode("utf-8", "replace"))
-sys.exit(p.returncode)
+sys.exit(124 if timed_out else p.returncode)
 PY
 }

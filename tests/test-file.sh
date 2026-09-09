@@ -13,7 +13,9 @@ set -u
 shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-file.XXXXXX")"
 mark="$shim/pager"
 doc="$shim/note.md"
-trap 'rm -rf "$shim"' EXIT
+# lib.sh sets its own EXIT trap for the glow version stub, and a second trap
+# would replace it rather than add to it, so remove both here.
+trap 'rm -rf "$shim" "${_preen_dep_shim:-}"' EXIT
 
 printf '# Notes\n\nA paragraph.\n' > "$doc"
 
@@ -48,8 +50,38 @@ out="$(PATH="$shim:$PATH"; export PATH; "$PREEN" "$doc" 2>/dev/null)"
 assert_contains "$out" "RENDERED note.md" "into a pipe the render still arrives"
 [ ! -e "$mark" ]; assert_true $? "into a pipe no pager is started"
 
-( PATH="$shim:$PATH"; export PATH; "$PREEN" "$doc" >/dev/null 2>&1 )
-assert_true $? "rendering one file exits 0"
+# ---- with no less on PATH ----------------------------------------------------
+# pager() falls back to cat rather than running a less that is not there. The
+# earlier version of this guard lost the whole render on such a machine.
+#
+# PATH is the shim alone, so `command -v less` genuinely fails. Everything
+# preen reaches on this path is linked in beside the stubs; a missing one shows
+# up as an empty render rather than a silent pass.
+bare="$shim/bare"; mkdir -p "$bare"
+ln -s "$shim/glow" "$bare/glow"
+for b in bash tput cat sed dirname basename; do
+  p="$(command -v "$b")" && ln -s "$p" "$bare/$b"
+done
+rm -f "$mark"
+# env, not an exported PATH: the shim PATH is for preen alone. Exporting it
+# would take tr and python3 away from the harness running the check.
+out="$(with_tty env PATH="$bare" "$PREEN" "$doc" | tr -d '\r')"
+assert_contains "$out" "RENDERED note.md" "with no less installed the render still arrives"
+
+# ---- the glow gate -----------------------------------------------------------
+# Every other renderer calls need_glow. This branch did not, so a machine
+# without glow got "glow: command not found" instead of preen saying so.
+out="$(PATH=/usr/bin:/bin "$PREEN" "$doc" 2>&1 || true)"
+assert_contains "$out" "glow is not installed" "a named file refuses without glow"
+
+old="$shim/old"; mkdir -p "$old"
+cat > "$old/glow" <<'EOF'
+#!/bin/sh
+case "$1" in --version) printf 'glow version 2.0.0\n'; exit 0 ;; esac
+EOF
+chmod +x "$old/glow"
+out="$(PATH="$old:/usr/bin:/bin"; export PATH; "$PREEN" "$doc" 2>&1 || true)"
+assert_contains "$out" "glow 3 or newer" "a named file refuses an old glow"
 
 # ---- a file that is not there ------------------------------------------------
 out="$(PATH="$shim:$PATH"; export PATH; "$PREEN" "$shim/absent.md" 2>&1 || true)"
