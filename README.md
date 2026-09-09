@@ -204,6 +204,17 @@ The diff layout lives in two named delta features so `preen` can flip between th
 
 Keep `side-by-side` out of the main `[delta]` section. Options there beat feature options, and the toggle stops working.
 
+## Tests
+
+```sh
+tests/run.sh            # everything
+tests/run.sh worktrees  # one area
+```
+
+Plain bash, no framework. Needs `git`, `delta` and `fzf`. Every test builds a
+throwaway repository under `$TMPDIR`, so nothing touches the checkout you run
+it from. `tests/README.md` explains how preen is driven without a terminal.
+
 ## Rebuilding the recordings
 
 ```sh

@@ -19,6 +19,14 @@ jobs:
         run: bin/preen --help > /dev/null && echo "ok  preen --help"
       - name: Installer dry run changes nothing
         run: ./install.sh --dry-run > /dev/null && echo "ok  install.sh --dry-run"
+      # The behaviour suite. Parsing the shell says nothing about what the tool
+      # does; this drives preen against throwaway repositories and checks the
+      # file lists, the previews, the stdin sniff, and that the review modes
+      # write nothing.
+      - name: Install the tools the suite drives
+        run: sudo apt-get update && sudo apt-get install -y git-delta fzf
+      - name: Test suite
+        run: tests/run.sh
 
   # The build is the real check on the site: it fails on a duplicate slug, a
   # missing frontmatter title or a broken component, and it prerenders every
