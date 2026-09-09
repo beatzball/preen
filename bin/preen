@@ -269,17 +269,17 @@ case "${1:-}" in
     f="$2"; w="$(tput cols)"
     kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
     if [ "$kind" = md ]; then
-      render_md "$w" "$f" | less -R
+      render_md "$w" "$f" | pager
     elif [ "$kind" = wt ]; then
-      render_wt "$w" "$f" "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" | less -R
+      render_wt "$w" "$f" "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" | pager
     elif [ "$kind" = pr ]; then
       render_pr "$w" "$f" \
-        "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" "$PREEN_STATE/pr.diff" | less -R
+        "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" "$PREEN_STATE/pr.diff" | pager
     else
       render_diff "$w" "$f" \
         "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" \
         "$(cat "$PREEN_STATE/rev"  2>/dev/null || echo '')" \
-        "$(cat "$PREEN_STATE/dir"  2>/dev/null || echo '')" | less -R
+        "$(cat "$PREEN_STATE/dir"  2>/dev/null || echo '')" | pager
     fi
     exit 0 ;;
   --toggle)

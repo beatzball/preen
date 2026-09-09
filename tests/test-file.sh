@@ -71,7 +71,14 @@ assert_contains "$out" "RENDERED note.md" "with no less installed the render sti
 # ---- the glow gate -----------------------------------------------------------
 # Every other renderer calls need_glow. This branch did not, so a machine
 # without glow got "glow: command not found" instead of preen saying so.
-out="$(PATH=/usr/bin:/bin "$PREEN" "$doc" 2>&1 || true)"
+# Built the same way as $bare rather than trusting /usr/bin:/bin to be free of
+# glow -- install.sh puts it exactly there on every Linux package manager it
+# supports, so that shortcut passes on this machine and fails on a contributor's.
+noglow="$shim/noglow"; mkdir -p "$noglow"
+for b in bash tput cat sed dirname basename less; do
+  p="$(command -v "$b")" && ln -s "$p" "$noglow/$b"
+done
+out="$(with_tty env PATH="$noglow" "$PREEN" "$doc" | tr -d '\r')"
 assert_contains "$out" "glow is not installed" "a named file refuses without glow"
 
 old="$shim/old"; mkdir -p "$old"
@@ -82,6 +89,12 @@ EOF
 chmod +x "$old/glow"
 out="$(PATH="$old:/usr/bin:/bin"; export PATH; "$PREEN" "$doc" 2>&1 || true)"
 assert_contains "$out" "glow 3 or newer" "a named file refuses an old glow"
+
+# The status is not interesting today -- the branch ends in an unconditional
+# `exit 0` -- but it is the line that would catch a future change making the
+# common case exit non-zero.
+( PATH="$shim:$PATH"; export PATH; "$PREEN" "$doc" >/dev/null 2>&1 )
+assert_true $? "rendering one file exits 0"
 
 # ---- a file that is not there ------------------------------------------------
 out="$(PATH="$shim:$PATH"; export PATH; "$PREEN" "$shim/absent.md" 2>&1 || true)"

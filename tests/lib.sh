@@ -196,14 +196,15 @@ PREEN_TTY_TIMEOUT="${PREEN_TTY_TIMEOUT:-30}"
 export PREEN_TTY_TIMEOUT
 
 with_tty() {
-  # with_tty <cmd> [args...] -> what the command wrote to a terminal.
+  # with_tty <cmd> [args...] -> what the command wrote to a terminal, stdout
+  # and stderr together, exactly as a person at a terminal would see them.
   # Exits 124 if the command outlived PREEN_TTY_TIMEOUT seconds.
   python3 - "$@" <<'PY'
 import os, pty, select, subprocess, sys, time
 deadline = time.monotonic() + float(os.environ.get("PREEN_TTY_TIMEOUT", "30"))
 master, slave = pty.openpty()
 p = subprocess.Popen(sys.argv[1:], stdin=subprocess.DEVNULL,
-                     stdout=slave, stderr=subprocess.DEVNULL)
+                     stdout=slave, stderr=slave)
 os.close(slave)
 out, timed_out = b"", False
 while True:
