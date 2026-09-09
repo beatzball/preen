@@ -46,7 +46,7 @@ green for the wrong reason.
 | `test-stdin.sh` | the diff/markdown sniff, including `---` alone staying markdown and a `--color=always` diff still reading as a diff |
 | `test-filenames.sh` | accented names, spaces, a leading dash, and the quote case from #3 as a known limit |
 | `test-pr.sh` | four `gh` calls whatever the file count, previews slice the cache, read-only |
-| `test-file.sh` | `preen FILE.md`: paged on a terminal, plain into a pipe, the glow gate, no less installed |
+| `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
 
 ## Four bugs these exist to hold shut
 

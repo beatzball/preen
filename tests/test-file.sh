@@ -75,7 +75,8 @@ assert_contains "$out" "RENDERED note.md" "with no less installed the render sti
 # glow -- install.sh puts it exactly there on every Linux package manager it
 # supports, so that shortcut passes on this machine and fails on a contributor's.
 noglow="$shim/noglow"; mkdir -p "$noglow"
-for b in bash tput cat sed dirname basename less; do
+ln -s "$shim/less" "$noglow/less"
+for b in bash tput cat sed dirname basename; do
   p="$(command -v "$b")" && ln -s "$p" "$noglow/$b"
 done
 out="$(with_tty env PATH="$noglow" "$PREEN" "$doc" | tr -d '\r')"
@@ -96,7 +97,27 @@ assert_contains "$out" "glow 3 or newer" "a named file refuses an old glow"
 ( PATH="$shim:$PATH"; export PATH; "$PREEN" "$doc" >/dev/null 2>&1 )
 assert_true $? "rendering one file exits 0"
 
+# ---- the picker's enter key --------------------------------------------------
+# --show is what fzf runs on enter, and it had its own four hard-coded `less -R`
+# calls. They go through pager() now, so the same two rules apply -- and without
+# this, reverting all four leaves the suite green.
+#
+# fzf binds it as execute($SELF --show {}), which hands the child the real
+# terminal, so the pty here is what that key press actually looks like.
+st="$(preen_state md)"
+rm -f "$mark"
+out="$(with_tty env PATH="$shim:$PATH" PREEN_STATE="$st" "$PREEN" --show "$doc" | tr -d '\r')"
+assert_contains "$out" "RENDERED note.md" "enter renders the file"
+assert_contains "$(cat "$mark" 2>/dev/null || echo none)" "less -R" \
+  "enter pages the render through less -R"
+
+rm -f "$mark"
+out="$(PATH="$shim:$PATH"; export PATH; PREEN_STATE="$st" "$PREEN" --show "$doc" 2>/dev/null)"
+assert_contains "$out" "RENDERED note.md" "--show into a pipe still renders"
+[ ! -e "$mark" ]; assert_true $? "--show into a pipe starts no pager"
+
 # ---- a file that is not there ------------------------------------------------
+rm -f "$mark"      # so this stands alone rather than inheriting an earlier mark
 out="$(PATH="$shim:$PATH"; export PATH; "$PREEN" "$shim/absent.md" 2>&1 || true)"
 assert_contains "$out" "no such file" "a missing file is refused by name"
 [ ! -e "$mark" ]; assert_true $? "a missing file starts no pager"
