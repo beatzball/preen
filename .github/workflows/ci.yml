@@ -57,17 +57,20 @@ jobs:
       - run: pnpm build
       - name: Install Playwright chromium
         run: pnpm exec playwright install --with-deps chromium
-      # `pnpm build` alone is not enough, and neither is the HTTP probe. A page
-      # module that imports a Node builtin still builds -- Vite externalizes it
-      # for the browser with a WARNING -- and the route still answers 200 with
-      # the prerendered markup in the document. The chunk then throws in the
-      # browser, the element never upgrades, and the page paints nothing. Only
-      # a real browser sees that.
+      # `pnpm build` alone is not enough, and neither is the HTTP probe. A
+      # broken client bundle still answers 200 with the prerendered markup in
+      # the document; it throws in the browser, the element never upgrades, and
+      # the page paints nothing. Only a real browser sees that.
       #
       # Two runs, not one, and the order matters. `dev` drives `litro dev`,
       # Vite serving modules from source. `preview` drives `litro preview`, the
       # prerendered dist/static that nginx ships -- the artifact production
       # actually serves, which nothing browser-level opened before this.
+      #
+      # What only `preview` can catch is client code that differs between the
+      # two builds: anything behind `import.meta.env.PROD`, anything the
+      # minifier or tree-shaker rewrites. A `throw` inside `if
+      # (import.meta.env.PROD)` passes `dev` 5/5 and fails `preview` 3/5.
       #
       # They cannot share a run: `litro dev` deletes dist/ on startup, which is
       # the directory `litro preview` serves, and Playwright starts the entries
@@ -76,6 +79,11 @@ jobs:
       - name: End-to-end (dev server)
         run: pnpm test:e2e:dev
       - name: End-to-end (built output)
+        # `!cancelled()`, so a dev-server failure does not skip this. Without
+        # it a branch that breaks both renderers needs two CI round trips to
+        # learn that, and the built output -- the thing that actually ships --
+        # is the half you would not hear about.
+        if: '!cancelled()'
         run: pnpm test:e2e:preview
       - name: Playwright report
         # This job gates smoke-image, which gates deploy, so a failure here

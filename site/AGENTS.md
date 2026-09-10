@@ -136,15 +136,21 @@ pnpm test:e2e:preview    # just the built output (rebuilds dist/ first)
 
 The same specs run twice, against two different renderers. `dev` is Vite
 serving modules from source; `preview` is the prerendered `dist/static` that
-nginx ships in production. They disagree more often than you would like: a page
-module that imports a Node builtin is externalized for the browser with a
-**warning**, so the build exits 0, the route answers 200, the prerendered
-markup is right there in the document — and the page still paints nothing once
-the chunk runs. `preview` is the only check that opens what actually ships.
+nginx ships in production. `preview` is the only check that opens what actually
+ships, and what it catches on its own is client code that behaves differently
+in the two builds — anything behind `import.meta.env.PROD`, anything the
+minifier or tree-shaker rewrites. A build exits 0 and the route answers 200
+either way, so nothing else in CI notices.
 
 They run one after the other, never together, because `litro dev` deletes
-`dist/` on startup and that is the directory `litro preview` serves. `dev` runs
-first, so `dist/` is left rebuilt and current when the run finishes.
+`dist/` on startup and that is the directory `litro preview` serves.
+
+**`dist/` is current only after the `preview` half has run**, because building
+it is the first half of that target's server command. If you ran
+`pnpm test:e2e:dev` on its own, or the `pnpm test:e2e` chain stopped when the
+dev half failed, then `dist/static` is **empty** — and `litro preview` prints
+its usual `Previewing static build at …` banner over it and serves 404 for
+every route. Run `pnpm build` before you trust a preview.
 
 **Do not check the built output with `python3 -m http.server`.** It serves
 `/_litro/app.js` with a MIME type Chrome rejects for a module script, so every
