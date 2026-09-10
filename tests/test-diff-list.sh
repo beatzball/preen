@@ -12,7 +12,7 @@ set -u
 . "$(dirname "$0")/lib.sh"
 
 d="$(new_repo)"; s=""; e=""
-trap 'rm -rf "$d" "$s" "$e"' EXIT
+trap 'rm -rf "$d" "$s" "$e" "${_preen_dep_shim:-}"' EXIT
 
 mkdir -p "$d/sub"
 printf 'deep\n' > "$d/sub/deep.txt"

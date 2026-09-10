@@ -169,6 +169,10 @@ preen_list_raw2() {
   # accepts the first record instead, which is what drives preen into level two,
   # and captures that list and its flags. The third call returns nothing so the
   # loop ends rather than cycling for ever.
+  #
+  # The record is fed back a line at a time, so this seam cannot drive a
+  # worktree whose own directory name contains a newline. The files inside one
+  # are what it is for, and those it carries whole.
   local out="$1" cwd="$2"; shift 2
   local shim
   shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-shim2.XXXXXX")"
@@ -216,7 +220,7 @@ preen_list() {
   local raw; raw="$(mktemp "${TMPDIR:-/tmp}/preen-list.XXXXXX")"
   preen_list_raw "$raw" "$cwd" "$@"
   tr '\0' '\n' < "$raw"
-  rm -f "$raw"
+  rm -f "$raw" "$raw".*          # the recorded flags go with it
 }
 
 # ---- asking a NUL-delimited list about one name -----------------------------

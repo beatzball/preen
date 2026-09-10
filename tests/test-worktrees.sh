@@ -12,7 +12,9 @@ d="$(new_repo)"; s=""
 # `git add -A` in the main checkout tries to add it as an embedded repo, which
 # buries the test output in hints and would eventually commit a gitlink.
 wt="$(mktemp -d "${TMPDIR:-/tmp}/preen-wt.XXXXXX")/w"
-trap 'rm -rf "$d" "$s" "$(dirname "$wt")"' EXIT
+# "${_preen_dep_shim:-}" because this trap replaces the one lib.sh set, which
+# is what was cleaning that up.
+trap 'rm -rf "$d" "$s" "$(dirname "$wt")" "${_preen_dep_shim:-}"' EXIT
 
 git -C "$d" worktree add -q -b feat "$wt" 2>/dev/null
 
@@ -73,6 +75,36 @@ after_wt="$(snapshot "$wt")"; after_main="$(snapshot "$d")"
 
 assert_eq "$after_wt"   "$before_wt"   "worktrees mode wrote nothing in the worktree"
 assert_eq "$after_main" "$before_main" "worktrees mode wrote nothing in the main checkout"
+
+# ---- git older than 2.36 ------------------------------------------------------
+# `worktree list --porcelain -z` arrived in git 2.36, and preen reshapes the
+# plain form when it is missing. Nothing here has an old git, so take the flag
+# away instead: a wrapper first on PATH that refuses -z on that one command and
+# passes everything else through. Without the fallback this mode dies with
+# "no worktrees besides the main checkout", which is the wrong answer, not a
+# smaller one.
+oldgit="$(mktemp -d "${TMPDIR:-/tmp}/preen-oldgit.XXXXXX")"
+cat > "$oldgit/git" <<'GITEOF'
+#!/bin/sh
+real="$(PATH="$(echo "$PATH" | sed "s|[^:]*preen-oldgit[^:]*:||g")" command -v git)"
+if [ "$1" = worktree ] && [ "$2" = list ]; then
+  for a in "$@"; do
+    [ "$a" = "-z" ] && { echo "error: unknown option \`z'" >&2; exit 129; }
+  done
+fi
+exec "$real" "$@"
+GITEOF
+chmod +x "$oldgit/git"
+
+PATH="$oldgit:$PATH" git worktree list --porcelain -z >/dev/null 2>&1
+assert_eq "$?" "129" "the fixture really does refuse -z, the way git 2.35 would"
+
+fallback="$(PATH="$oldgit:$PATH" preen_list "$d" worktrees)"
+assert_eq "$(printf '%s\n' "$fallback" | grep -c 'feat')" "1" \
+  "the pre-2.36 fallback still lists the worktree"
+assert_eq "$(printf '%s\n' "$fallback" | head -n 1 | awk '{print $1}')" "2" \
+  "and still counts its files"
+rm -rf "$oldgit"
 
 # ---- a repo with no worktrees says so ---------------------------------------
 bare="$(new_repo)"

@@ -16,7 +16,7 @@ set -u
 
 d="$(new_repo)"; s=""; wtroot=""; mdd=""; shim=""
 raw="$(mktemp "${TMPDIR:-/tmp}/preen-raw.XXXXXX")"
-trap 'rm -rf "$d" "$s" "$wtroot" "$mdd" "$shim"; rm -f "$raw"' EXIT
+trap 'rm -rf "$d" "$s" "$wtroot" "$mdd" "$shim" "${_preen_dep_shim:-}"; rm -f "$raw" "$raw".*' EXIT
 s="$(preen_state diff sbs "" "")"
 
 # printf %q, so a name containing a newline still prints as one readable line
@@ -118,7 +118,10 @@ assert_nonempty "$out" "previews: -leading.txt"
 # because the count came from a list of escaped names and the preview tried to
 # open them. Each file carries its own marker, so "shown" is countable.
 wtroot="$(mktemp -d "${TMPDIR:-/tmp}/preen-wtroot.XXXXXX")"
-wt="$wtroot/w"
+# A space in the worktree's own path, because that is what tells a quoted
+# expansion from an unquoted one when ctrl-e spends it further down.
+mkdir -p "$wtroot/odd dir"
+wt="$wtroot/odd dir/w"
 git -C "$d" worktree add -q -b odd "$wt" 2>/dev/null
 
 # wt_files has two halves, built by two different git commands, and a fixture
@@ -137,7 +140,7 @@ out="$(preview "$swt" "$wt")"
 assert_contains "$out" "MARKER-quote"   "worktree preview opens a name with a quote"
 assert_contains "$out" "MARKER-slash"   "worktree preview opens a name with a backslash"
 assert_contains "$out" "MARKER-newline" "worktree preview opens a name with a newline"
-assert_contains "$out" "MARKER-tracked" "worktree preview shows a TRACKED odd name too (the diff half of wt_files)"
+assert_contains "$out" "MARKER-tracked" "worktree preview shows a modified tracked file as well as the untracked ones"
 
 # ---- worktrees level two -----------------------------------------------------
 # The file list inside a worktree, which nothing else in the suite reaches: the
@@ -159,6 +162,27 @@ assert_eq "$(list_count "$raw2")" "4" "worktree level two holds one entry per fi
 bind="$(list_bind "$raw2" 'ctrl-e')"
 assert_contains "$bind" 'PREEN_WT_DIR' "ctrl-e takes the worktree path from the environment"
 assert_not_contains "$bind" "$wt" "ctrl-e does not paste the worktree path into the command"
+
+# Both of those grade the shape of a string. The quoting inside it is what does
+# the work, so run the thing: strip fzf's own `execute(...)` wrapper, put a
+# shell-quoted filename where fzf puts one, and let a shell have it. A path
+# with a space in it is what an unquoted $PREEN_WT_DIR breaks on.
+cmd="${bind#execute(}"; cmd="${cmd%)}"
+edlog="$(mktemp "${TMPDIR:-/tmp}/preen-ed.XXXXXX")"
+edbin="$(mktemp -d "${TMPDIR:-/tmp}/preen-edbin.XXXXXX")"
+cat > "$edbin/ed" <<EOF
+#!/bin/sh
+printf '%s\n' "\$#" > "$edlog"
+printf '%s\n' "\$1" >> "$edlog"
+[ -e "\$1" ] && printf 'exists\n' >> "$edlog" || printf 'missing\n' >> "$edlog"
+EOF
+chmod +x "$edbin/ed"
+( export PREEN_WT_DIR="$wt" EDITOR="$edbin/ed"
+  sh -c "$(printf '%s' "$cmd" | sed "s|{}|'wt\"quote.txt'|")" ) >/dev/null 2>&1
+
+assert_eq "$(sed -n 1p "$edlog")" "1"      "ctrl-e hands the editor exactly one argument"
+assert_eq "$(sed -n 3p "$edlog")" "exists" "ctrl-e opens a file that is really there"
+rm -rf "$edbin"; rm -f "$edlog"
 rm -f "$raw2" "$raw2.argv" "$raw2.n" "$raw2.level1"
 
 count="$(preen_list "$d" worktrees | head -n 1 | awk '{print $1}')"
@@ -205,7 +229,11 @@ done
 prd="$(mktemp -d "${TMPDIR:-/tmp}/preen-prsrc.XXXXXX")"
 git init -q -b main "$prd"
 pr_names=( 'plain.txt' 'with space.txt' 'has"quote.txt' 'back\slash.txt'
-           $'tab\there.txt' 'café.txt' )
+           $'tab\there.txt' 'café.txt'
+           # These two differ only by a wrapping pair of double quotes. A
+           # name that is spelled like a quoted name, but is just a name,
+           # must not match the block belonging to its own interior.
+           '"quoted".txt' 'quoted.txt' )
 i=0
 for n in "${pr_names[@]}"; do printf 'PR-%s-before\n' "$i" > "$prd/$n"; i=$((i + 1)); done
 tgit -C "$prd" add -A; tgit -C "$prd" commit -qm pr
@@ -282,7 +310,7 @@ done
 pr_run raw
 for n in "${pr_names[@]}"; do
   list_has "$raw" "$n"
-  assert_true $? "pr mode carries gh's name through whole: $(q "$n")"
+  assert_true $? "pr mode holds gh's name as one entry, unsplit: $(q "$n")"
 done
 rm -rf "$spr" "$prd" "$shim"; shim=""
 

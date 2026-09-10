@@ -60,7 +60,7 @@ assert_eq "$got" "glow" "ordinary markdown goes to glow"
 # git diff --color=always paints its own headers, so the sniff strips ANSI
 # first. Without that step ^--- never matches and a coloured diff is read as
 # markdown — the exact case the docs promise works.
-d="$(new_repo)"; trap 'rm -rf "$d"' EXIT
+d="$(new_repo)"; trap 'rm -rf "$d" "${_preen_dep_shim:-}"' EXIT
 printf 'changed\n' >> "$d/f.txt"
 got="$(git -C "$d" diff --color=always | rendered_by)"
 assert_eq "$got" "delta" "a --color=always diff is still read as a diff"

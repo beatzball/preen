@@ -124,7 +124,7 @@ wt_files() {
       gitw "$d" diff --name-only -z HEAD
     fi
     gitw "$d" ls-files --others --exclude-standard -z
-  } 2>/dev/null | sort -z -u
+  } 2>/dev/null | LC_ALL=C sort -z -u
 }
 
 # the worktree paths themselves. --porcelain -z is the only form that carries a
@@ -232,9 +232,14 @@ pr_slice() {
       }
       return out
     }
+    # A name gh handed us in the C-quoted spelling. The interior backslash
+    # matters: git quotes a path only when it has something to escape, so a
+    # file whose name really is wrapped in quotes -- and holds no escape -- is
+    # left alone, rather than also matching a file named by its interior.
     function quoted(s) {
-      return (length(s) > 1 && substr(s, 1, 1) == "\"" \
-              && substr(s, length(s), 1) == "\"")
+      return (length(s) > 2 && substr(s, 1, 1) == "\"" \
+              && substr(s, length(s), 1) == "\"" \
+              && index(substr(s, 2, length(s) - 2), "\\") > 0)
     }
     # the b-path of a header, decoded. Empty when the header is not quoted: an
     # unquoted path may contain a space, which makes the a/b split ambiguous,
@@ -572,7 +577,7 @@ elif [ "$KIND" = md ]; then
   # -print0 for the same reason git gets -z: find is the only thing that knows
   # the name, and a newline in it would otherwise arrive as two half-names.
   collect_files < <(find "${TARGET:-.}" -type f \( -name '*.md' -o -name '*.markdown' \) \
-                      -not -path '*/.git/*' -not -path '*/node_modules/*' -print0 | sort -z)
+                      -not -path '*/.git/*' -not -path '*/node_modules/*' -print0 | LC_ALL=C sort -z)
   i=0
   while [ "$i" -lt ${#FILES[@]} ]; do FILES[$i]="${FILES[$i]#./}"; i=$((i + 1)); done
   HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nenter render · ctrl-e edit · ctrl-/ hide · esc quit'
@@ -611,11 +616,11 @@ else
   elif git rev-parse --verify -q HEAD >/dev/null 2>&1; then
     collect_files < <({ gitw "" diff --name-only -z HEAD
                         gitw "" ls-files --others --exclude-standard -z
-                      } | sort -z -u)
+                      } | LC_ALL=C sort -z -u)
   else
     collect_files < <({ gitw "" diff --name-only -z --cached
                         gitw "" ls-files --others --exclude-standard -z
-                      } | sort -z -u)
+                      } | LC_ALL=C sort -z -u)
   fi
   HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc quit'
 fi

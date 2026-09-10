@@ -9,7 +9,7 @@ set -u
 . "$(dirname "$0")/lib.sh"
 
 d="$(new_repo)"; shim=""; s=""
-trap 'rm -rf "$d" "$shim" "$s"' EXIT
+trap 'rm -rf "$d" "$shim" "$s" "${_preen_dep_shim:-}"' EXIT
 
 # A PR touching several files, so a per-file call would show up as a count.
 DIFF='diff --git a/one.txt b/one.txt
