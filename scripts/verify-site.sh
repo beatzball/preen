@@ -136,6 +136,71 @@ check_content /             '>Built on three great tools<' '>Get Started<'
 check_content /docs/theming '<h2 id="one-palette-two-renderers"' '<h2 id="every-environment-variable"' 'class="hljs '
 check_content /docs/pipes   '<h2 id="pipe-anything-in"' '<h2 id="where-this-is-already-wired-up-for-you"'
 
+# The "Edit this page" link is assembled from two halves -- a base in
+# server/starlight.config.js and a path in pages/docs/[slug].ts -- and both of
+# them added `content/docs`, so every doc page linked to
+# site/content/docs/content/docs/<slug>.md, which does not exist. The page
+# itself still returned 200 and still rendered, so nothing above catches it.
+#
+# Two assertions, because neither one catches what the other does.
+#
+# The shape, on every doc page: the doubled segment is in the MIDDLE of the
+# URL, so matching the tail (".../pipes.md") passes on the broken link. The
+# whole URL is compared instead, which also fails loudly if the base is ever
+# changed -- deliberately or not.
+#
+# And a real fetch, on one page: a wrong-but-well-shaped path (a renamed file,
+# a moved directory) looks fine as a string. The fetch goes through
+# raw.githubusercontent.com because github.com/.../edit/... redirects anyone
+# who is not signed in to a login page, whether or not the file is there, so
+# its status code cannot tell a real path from a typo.
+#
+# Only /docs/pipes is fetched, and its file is already on main. A pull request
+# that ADDS a doc page therefore does not go red here for a file main has not
+# got yet, while the shape check still covers the new page.
+EDIT_BASE="https://github.com/beatzball/preen/edit/main/site/content/docs"
+
+edit_link() {
+  # tr puts every tag on its own line, so the anchor can be matched from the
+  # start and the href picked off it.
+  body "$BASE$1" | tr '<' '\n' |
+    sed -n 's|^a href="\(https://github\.com/[^"]*/edit/[^"]*\)".*|\1|p' | head -1
+}
+
+check_edit_link() {
+  path="$1"; want="$2"
+  url=$(edit_link "$path")
+  if [ -z "$url" ]; then bad "$path has no \"Edit this page\" link"; return; fi
+  if [ "$url" != "$want" ]; then
+    bad "$path edit link is $url"
+    bad "  expected $want"
+    return
+  fi
+  note "edit link ok  $path"
+}
+
+check_edit_link_resolves() {
+  path="$1"
+  url=$(edit_link "$path")
+  [ -n "$url" ] || return   # already reported by check_edit_link
+  raw=$(printf '%s\n' "$url" |
+    sed -n 's|^https://github\.com/\([^/]*\)/\([^/]*\)/edit/\([^/]*\)/\(.*\)$|https://raw.githubusercontent.com/\1/\2/\3/\4|p')
+  if [ -z "$raw" ]; then bad "$path edit link is not a github edit URL: $url"; return; fi
+  code=$(status "$raw")
+  if [ "$code" = "200" ]; then note "edit link resolves  $path"
+  else bad "$path edit link points at a file that is not there ($code): $url"; fi
+}
+
+while IFS= read -r path; do
+  case "$path" in /docs/*) ;; *) continue ;; esac
+  slug=${path#/docs/}
+  check_edit_link "$path" "$EDIT_BASE/$slug.md"
+done <<EOF
+$PAGES
+EOF
+
+check_edit_link_resolves /docs/pipes
+
 # A 404 that returns 200 means try_files is misconfigured and every typo looks
 # like a real page.
 code=$(status "$BASE/definitely-not-a-page")

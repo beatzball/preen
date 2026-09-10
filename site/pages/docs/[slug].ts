@@ -135,7 +135,7 @@ export const pageData = definePageData(async (event) => {
   const title = doc.title || slug;
   const description = doc.description || siteConfig.description;
   const editUrl = siteConfig.editUrlBase
-    ? `${siteConfig.editUrlBase}/content/docs/${slug}.md`
+    ? `${siteConfig.editUrlBase}/${slug}.md`
     : null;
 
   return {
