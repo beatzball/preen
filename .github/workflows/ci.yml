@@ -6,15 +6,16 @@ jobs:
   # `bash -n` catches an unclosed quote or a broken heredoc, which is most of
   # what actually goes wrong in a file this shape.
   # Two runners, because the two halves of what preen stands on differ. Linux
-  # gives it bash 5 and GNU coreutils; macOS gives it **bash 3.2.57** -- the
-  # last GPLv2 release, frozen in 2007 -- and the BSD versions of sort, tr,
-  # find and awk. preen is a bash script that builds NUL-delimited path lists
+  # gives it bash 5 and GNU coreutils; macOS gives it **bash 3.2.57** and the
+  # BSD versions of sort, tr, find and awk. 3.2 is the last GPLv2 series
+  # (2006); Apple stopped there because 4.0 went GPLv3, and 3.2.57 is its final
+  # patchlevel, from the 2014 Shellshock round. preen is a bash script that builds NUL-delimited path lists
   # with `read -d ""`, `${arr[@]+"${arr[@]}"}` under `set -u`, `sort -z`,
   # `find -print0` and an awk that decodes octal escapes. Every one of those is
   # somewhere the two platforms can disagree, and macOS is where preen is most
   # often run, so a green Linux job on its own says less than it looks.
   shell:
-    timeout-minutes: 20
+    timeout-minutes: 10
     runs-on: ${{ matrix.os }}
     strategy:
       # Not fail-fast: when a change breaks one platform, the interesting
@@ -25,10 +26,22 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      # What actually ran, in the log, for both runners. `bin/preen` and every
-      # test file are `#!/usr/bin/env bash`, so the interpreter is whichever
-      # bash PATH resolves -- a fact worth printing rather than assuming, and
-      # the first thing to read if this job ever fails on one OS only.
+      # Pin the interpreter before any step reads it. `bin/preen`, the
+      # installer and every test file are `#!/usr/bin/env bash`, so the version
+      # they run under is whichever bash PATH resolves -- and if this image
+      # ever ships a Homebrew bash 5 ahead of the system one, this repo would
+      # quietly lose the only 3.2 coverage it has. GITHUB_PATH prepends for
+      # every LATER step, so the diagnostic below, the syntax check, --help,
+      # the installer and the suite all agree by construction.
+      #
+      # /bin holds core BSD tools only -- no fzf, delta, git, python3, sort,
+      # awk or find -- so nothing else is shadowed. The listing is printed
+      # below rather than asserted, because that is evidence and this is a pin.
+      - name: Pin macOS to the system bash
+        if: runner.os == 'macOS'
+        run: echo "/bin" >> "$GITHUB_PATH"
+      # What actually ran, in the log, for both runners -- the first thing to
+      # read if this job ever fails on one OS only.
       - name: Which bash and which userland
         run: |
           echo "bash:  $(command -v bash)"
@@ -36,12 +49,19 @@ jobs:
           echo "sort:  $(command -v sort)"
           echo "awk:   $(command -v awk)"
           echo "find:  $(command -v find)"
+          if [ "$RUNNER_OS" = macOS ]; then echo "/bin:  $(ls /bin | tr '\n' ' ')"; fi
+      # `|| exit 1`, not `&& echo`. Under `set -e` the left side of an `&&` is
+      # exempt from the abort, and a `for` loop exits with the status of its
+      # LAST iteration -- so the old form printed the syntax error and passed,
+      # and only the final line of the step was ever enforced.
       - name: Parse the shell
         run: |
           for f in bin/preen install.sh site/sync-assets.sh; do
-            bash -n "$f" && echo "ok  $f"
+            bash -n "$f" || exit 1
+            echo "ok  $f"
           done
-          sh -n scripts/verify-site.sh && echo "ok  scripts/verify-site.sh"
+          sh -n scripts/verify-site.sh || exit 1
+          echo "ok  scripts/verify-site.sh"
       - name: Help output runs
         run: bin/preen --help > /dev/null && echo "ok  preen --help"
       - name: Installer dry run changes nothing
@@ -60,13 +80,7 @@ jobs:
         # installs is `delta`, which is the name the tests look for.
         run: brew install git-delta fzf
       - name: Test suite
-        # `/bin` first on macOS, so `#!/usr/bin/env bash` resolves to the
-        # system bash 3.2 even if the image ever ships a newer one earlier on
-        # PATH. /bin holds only the BSD core tools, so fzf, delta and git are
-        # still found further along -- and testing against a Homebrew bash 5
-        # here would quietly retire the only 3.2 coverage this repo has.
         run: |
-          if [ "$RUNNER_OS" = macOS ]; then PATH="/bin:$PATH"; fi
           echo "running the suite under: $(command -v bash) $(bash --version | head -n 1)"
           tests/run.sh
 
