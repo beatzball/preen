@@ -9,9 +9,11 @@ Plain bash, no framework. Needs `git`, `delta`, `fzf` and `python3`. It does
 **not** need `glow` — nothing here asserts on glow's output, so `lib.sh` stubs
 the version check preen makes at startup and CI never installs it.
 
-`python3` is only for `with_tty`, which allocates a pty so the tests can reach
-the code preen runs on a terminal. `pager()` branches on `[ -t 1 ]`, and a test
-harness only ever offers a pipe, so there is no other way in.
+`python3` is for two things. `with_tty` allocates a pty so the tests can reach
+the code preen runs on a terminal — `pager()` branches on `[ -t 1 ]`, and a test
+harness only ever offers a pipe, so there is no other way in. `list_has` and its
+neighbours read the file list, which is NUL-delimited and holds a name with a
+newline in it: the pair of bytes no line-oriented tool can handle at once.
 
 Every test builds a throwaway repository under `$TMPDIR` and removes it on
 exit. Nothing touches the checkout it runs from, which matters more than usual
@@ -44,11 +46,11 @@ green for the wrong reason.
 | `test-diff-list.sh` | the list from the root and from a subdirectory, a revision argument, a repo with no commit, staged and unstaged together |
 | `test-worktrees.sh` | the count agrees with the level-one preview, merge-base rather than the branch tip, the main checkout is excluded, read-only |
 | `test-stdin.sh` | the diff/markdown sniff, including `---` alone staying markdown and a `--color=always` diff still reading as a diff |
-| `test-filenames.sh` | accented names, spaces, a leading dash, and the quote case from #3 as a known limit |
+| `test-filenames.sh` | accented names, spaces, a leading dash, and the quote, backslash and newline cases from #3, in diff, md, worktrees and pr modes |
 | `test-pr.sh` | four `gh` calls whatever the file count, previews slice the cache, read-only |
 | `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
 
-## Four bugs these exist to hold shut
+## Five bugs these exist to hold shut
 
 Each was found by review, fixed, and is now covered. Reverting any one of the
 fixes turns this suite red:
@@ -59,6 +61,9 @@ fixes turns this suite red:
 - **A worktree's count and its preview disagreed** — untracked files were
   counted but not shown, so a worktree could say "2 files" and show one.
 - **Non-ASCII filenames** came back escaped, listed but unopenable.
+- **A quote, a backslash or a newline in a filename** came back escaped too,
+  whatever `core.quotePath` said, and a newline also split one name into two
+  entries. Every list is now built with `-z` and read on NUL.
 - **`preen FILE.md` was not paged**, so it exited the moment the last line was
   written. A tmux pane opened only to read the file closed with it, which read
   as glow never having run.
@@ -73,7 +78,9 @@ assert, clean up in a `trap`. Assertions are `assert_eq`, `assert_contains`,
 Two things worth knowing:
 
 - **Prove a new test fails on the bug it names.** Revert the fix, watch it go
-  red, put the fix back. A test that has never failed is not evidence.
+  red, put the fix back. A test that has never failed is not evidence. Watch
+  what it goes red *for*, too: a loop over a list can pass by never running,
+  and a fixture can miss the code path it was written for.
 - **`run.sh` fails the run if a file exits non-zero**, even when every line it
   printed was a `PASS` — a syntax error or an early `set -e` abort otherwise
   just contributes fewer PASS lines and no FAIL lines, and the totals would

@@ -136,12 +136,16 @@ snapshot() {
 # So put a fake `fzf` first on PATH that writes its stdin out and exits. What
 # that captures is exactly the list the real picker would have been given.
 
-preen_list() {
-  # preen_list <cwd> <preen args...> -> the list preen hands fzf, one per line
-  local cwd="$1"; shift
-  local shim out
+preen_list_raw() {
+  # preen_list_raw <outfile> <cwd> <preen args...>
+  #   -> the exact bytes preen hands fzf, written to <outfile>
+  #
+  # A file, not a string, because the list is NUL-delimited and a filename may
+  # contain a newline: bash cannot hold a NUL, and "$(...)" would drop the
+  # separators and glue two names into one.
+  local out="$1" cwd="$2"; shift 2
+  local shim
   shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-shim.XXXXXX")"
-  out="$shim/list"
   cat > "$shim/fzf" <<EOF
 #!/bin/sh
 cat > "$out"
@@ -149,8 +153,59 @@ exit 0
 EOF
   chmod +x "$shim/fzf"
   ( cd "$cwd" && PATH="$shim:$PATH" "$PREEN" "$@" >/dev/null 2>&1 )
-  cat "$out" 2>/dev/null
   rm -rf "$shim"
+}
+
+preen_list() {
+  # preen_list <cwd> <preen args...> -> the list preen hands fzf, one per line
+  #
+  # For the many names that hold no newline this is the readable form. A test
+  # about a name that does hold one wants preen_list_raw and list_has.
+  local cwd="$1"; shift
+  local raw; raw="$(mktemp "${TMPDIR:-/tmp}/preen-list.XXXXXX")"
+  preen_list_raw "$raw" "$cwd" "$@"
+  tr '\0' '\n' < "$raw"
+  rm -f "$raw"
+}
+
+# ---- asking a NUL-delimited list about one name -----------------------------
+#
+# python3 rather than grep or awk: the entries are separated by NUL and one of
+# them contains a newline, which is exactly the pair of bytes the line-oriented
+# tools cannot both handle. It is already a dependency of with_tty below.
+
+list_names_py='
+import sys, os
+raw = open(sys.argv[1], "rb").read()
+names = [n for n in raw.split(b"\0") if n]
+'
+
+list_has() {
+  # list_has <raw-list-file> <name> -> exit 0 if the list holds exactly <name>
+  python3 -c "$list_names_py"'
+sys.exit(0 if os.fsencode(sys.argv[2]) in names else 1)
+' "$1" "$2"
+}
+
+list_holds_name() {
+  # list_holds_name <raw-list-file> <name>
+  #   -> exit 0 if the name's own bytes appear in the list, as they are
+  #
+  # Deliberately blind to what separates the entries: this asks only whether
+  # git escaped the name, which is the half of the bug that -z fixes and the
+  # half that a name with a quote or a backslash fails on all by itself.
+  python3 -c '
+import sys, os
+raw = open(sys.argv[1], "rb").read()
+sys.exit(0 if os.fsencode(sys.argv[2]) in raw else 1)
+' "$1" "$2"
+}
+
+list_count() {
+  # list_count <raw-list-file> -> how many entries the list holds
+  python3 -c "$list_names_py"'
+print(len(names))
+' "$1"
 }
 
 # ---- satisfying preen's dependency gates ------------------------------------
