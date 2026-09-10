@@ -129,8 +129,22 @@ pnpm dev            # http://localhost:3000
 End-to-end checks:
 
 ```sh
-pnpm test:e2e       # runs against `pnpm dev`, so it clears dist/ — rebuild after
+pnpm test:e2e            # both targets, in order
+pnpm test:e2e:dev        # just `litro dev`
+pnpm test:e2e:preview    # just the built output (rebuilds dist/ first)
 ```
+
+The same specs run twice, against two different renderers. `dev` is Vite
+serving modules from source; `preview` is the prerendered `dist/static` that
+nginx ships in production. They disagree more often than you would like: a page
+module that imports a Node builtin is externalized for the browser with a
+**warning**, so the build exits 0, the route answers 200, the prerendered
+markup is right there in the document — and the page still paints nothing once
+the chunk runs. `preview` is the only check that opens what actually ships.
+
+They run one after the other, never together, because `litro dev` deletes
+`dist/` on startup and that is the directory `litro preview` serves. `dev` runs
+first, so `dist/` is left rebuilt and current when the run finishes.
 
 **Do not check the built output with `python3 -m http.server`.** It serves
 `/_litro/app.js` with a MIME type Chrome rejects for a module script, so every
