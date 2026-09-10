@@ -84,16 +84,27 @@ assert_eq "$got" "a.txt " "list in a repository with no commit"
 # a sort that has stopped seeing the entries.
 #
 # Its own repository, so it cannot disturb the fixture above.
+# The names are chosen so that byte order and a collating locale disagree:
+# LC_ALL=C puts every capital before every lowercase and sorts punctuation by
+# its byte, while en_US.UTF-8 folds case and ignores the leading punctuation.
+# So this also fails if the sorts stop pinning the locale, whatever locale the
+# person running the suite happens to have.
 o_repo="$(new_repo)"
 printf 'zz\n' > "$o_repo/zz-tracked.txt"
+printf 'zz\n' > "$o_repo/Zebra.txt"
+printf 'zz\n' > "$o_repo/_under.txt"
 tgit -C "$o_repo" add -A; tgit -C "$o_repo" commit -qm ordering
 printf 'more\n' >> "$o_repo/zz-tracked.txt"
+printf 'more\n' >> "$o_repo/Zebra.txt"
+printf 'more\n' >> "$o_repo/_under.txt"
 printf 'new\n'  > "$o_repo/aa-untracked.txt"
+printf 'new\n'  > "$o_repo/-dash.txt"
 
 o="$(mktemp "${TMPDIR:-/tmp}/preen-order.XXXXXX")"
 preen_list_raw "$o" "$o_repo" diff
-assert_eq "$(preen_list "$o_repo" diff | tr '\n' ' ')" "aa-untracked.txt zz-tracked.txt " \
-  "the untracked name sorts before the tracked one, not after it"
+assert_eq "$(preen_list "$o_repo" diff | tr '\n' ' ')" \
+  "-dash.txt Zebra.txt _under.txt aa-untracked.txt zz-tracked.txt " \
+  "the list is in byte order, whatever locale the suite is run in"
 list_in_order "$o"
 assert_true $? "the list is sorted, tracked and untracked names together"
 rm -f "$o" "$o.argv"; rm -rf "$o_repo"

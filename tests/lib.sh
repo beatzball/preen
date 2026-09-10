@@ -145,6 +145,7 @@ preen_list_raw() {
   # separators and glue two names into one.
   local out="$1" cwd="$2"; shift 2
   local shim
+  [ -n "$out" ] || { printf '  FAIL: preen_list_raw was given no outfile\n'; return 1; }
   shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-shim.XXXXXX")"
   # Truncate both, so a run that dies before reaching fzf leaves an empty list
   # rather than the previous call's one for the next assertions to grade.
@@ -175,6 +176,7 @@ preen_list_raw2() {
   # are what it is for, and those it carries whole.
   local out="$1" cwd="$2"; shift 2
   local shim
+  [ -n "$out" ] || { printf '  FAIL: preen_list_raw2 was given no outfile\n'; return 1; }
   shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-shim2.XXXXXX")"
   : > "$out"; : > "$out.argv"; rm -f "$out.n"
   cat > "$shim/fzf" <<EOF
@@ -220,7 +222,7 @@ preen_list() {
   local raw; raw="$(mktemp "${TMPDIR:-/tmp}/preen-list.XXXXXX")"
   preen_list_raw "$raw" "$cwd" "$@"
   tr '\0' '\n' < "$raw"
-  rm -f "$raw" "$raw".*          # the recorded flags go with it
+  rm -f "$raw" "$raw.argv"       # the recorded flags go with it
 }
 
 # ---- asking a NUL-delimited list about one name -----------------------------

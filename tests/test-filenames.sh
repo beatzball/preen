@@ -15,8 +15,18 @@ set -u
 . "$(dirname "$0")/lib.sh"
 
 d="$(new_repo)"; s=""; wtroot=""; mdd=""; shim=""
+prd=""; spr=""; edbin=""; edlog=""; raw2=""
 raw="$(mktemp "${TMPDIR:-/tmp}/preen-raw.XXXXXX")"
-trap 'rm -rf "$d" "$s" "$wtroot" "$mdd" "$shim" "${_preen_dep_shim:-}"; rm -f "$raw" "$raw".*' EXIT
+# Every temp path this file makes, named rather than globbed: `"$raw".*` with
+# an empty $raw is `.*`, which reaches the dotfiles of whatever directory the
+# suite was started from.
+cleanup() {
+  rm -rf "$d" "$s" "$wtroot" "$mdd" "$shim" "$prd" "$spr" "$edbin" \
+         "${_preen_dep_shim:-}"
+  rm -f "$edlog" ${raw:+"$raw" "$raw.argv"} \
+        ${raw2:+"$raw2" "$raw2.argv" "$raw2.n" "$raw2.level1"}
+}
+trap cleanup EXIT
 s="$(preen_state diff sbs "" "")"
 
 # printf %q, so a name containing a newline still prints as one readable line
@@ -182,8 +192,8 @@ chmod +x "$edbin/ed"
 
 assert_eq "$(sed -n 1p "$edlog")" "1"      "ctrl-e hands the editor exactly one argument"
 assert_eq "$(sed -n 3p "$edlog")" "exists" "ctrl-e opens a file that is really there"
-rm -rf "$edbin"; rm -f "$edlog"
-rm -f "$raw2" "$raw2.argv" "$raw2.n" "$raw2.level1"
+
+
 
 count="$(preen_list "$d" worktrees | head -n 1 | awk '{print $1}')"
 shown="$(printf '%s\n' "$out" | grep -c 'MARKER-')"
@@ -233,7 +243,7 @@ pr_names=( 'plain.txt' 'with space.txt' 'has"quote.txt' 'back\slash.txt'
            # These two differ only by a wrapping pair of double quotes. A
            # name that is spelled like a quoted name, but is just a name,
            # must not match the block belonging to its own interior.
-           '"quoted".txt' 'quoted.txt' )
+           '"quoted"' 'quoted' )
 i=0
 for n in "${pr_names[@]}"; do printf 'PR-%s-before\n' "$i" > "$prd/$n"; i=$((i + 1)); done
 tgit -C "$prd" add -A; tgit -C "$prd" commit -qm pr
@@ -312,7 +322,7 @@ for n in "${pr_names[@]}"; do
   list_has "$raw" "$n"
   assert_true $? "pr mode holds gh's name as one entry, unsplit: $(q "$n")"
 done
-rm -rf "$spr" "$prd" "$shim"; shim=""
+
 
 # ---- ordinary names are untouched by any of this ----------------------------
 # None of the above may change behaviour for the names everyone actually uses.
