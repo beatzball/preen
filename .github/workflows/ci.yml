@@ -5,11 +5,37 @@ jobs:
   # preen is a bash script, so the cheapest useful check is that it parses.
   # `bash -n` catches an unclosed quote or a broken heredoc, which is most of
   # what actually goes wrong in a file this shape.
+  # Two runners, because the two halves of what preen stands on differ. Linux
+  # gives it bash 5 and GNU coreutils; macOS gives it **bash 3.2.57** -- the
+  # last GPLv2 release, frozen in 2007 -- and the BSD versions of sort, tr,
+  # find and awk. preen is a bash script that builds NUL-delimited path lists
+  # with `read -d ""`, `${arr[@]+"${arr[@]}"}` under `set -u`, `sort -z`,
+  # `find -print0` and an awk that decodes octal escapes. Every one of those is
+  # somewhere the two platforms can disagree, and macOS is where preen is most
+  # often run, so a green Linux job on its own says less than it looks.
   shell:
-    timeout-minutes: 10
-    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Not fail-fast: when a change breaks one platform, the interesting
+      # question is immediately whether it broke the other, and cancelling the
+      # sibling job throws that answer away.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+      # What actually ran, in the log, for both runners. `bin/preen` and every
+      # test file are `#!/usr/bin/env bash`, so the interpreter is whichever
+      # bash PATH resolves -- a fact worth printing rather than assuming, and
+      # the first thing to read if this job ever fails on one OS only.
+      - name: Which bash and which userland
+        run: |
+          echo "bash:  $(command -v bash)"
+          bash --version | head -n 1
+          echo "sort:  $(command -v sort)"
+          echo "awk:   $(command -v awk)"
+          echo "find:  $(command -v find)"
       - name: Parse the shell
         run: |
           for f in bin/preen install.sh site/sync-assets.sh; do
@@ -24,10 +50,25 @@ jobs:
       # does; this drives preen against throwaway repositories and checks the
       # file lists, the previews, the stdin sniff, and that the review modes
       # write nothing.
-      - name: Install the tools the suite drives
+      - name: Install the tools the suite drives (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y git-delta fzf
+      - name: Install the tools the suite drives (macOS)
+        if: runner.os == 'macOS'
+        # No `brew update`: the runner image is already current, and updating
+        # costs minutes for nothing. git-delta is the formula; the binary it
+        # installs is `delta`, which is the name the tests look for.
+        run: brew install git-delta fzf
       - name: Test suite
-        run: tests/run.sh
+        # `/bin` first on macOS, so `#!/usr/bin/env bash` resolves to the
+        # system bash 3.2 even if the image ever ships a newer one earlier on
+        # PATH. /bin holds only the BSD core tools, so fzf, delta and git are
+        # still found further along -- and testing against a Homebrew bash 5
+        # here would quietly retire the only 3.2 coverage this repo has.
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then PATH="/bin:$PATH"; fi
+          echo "running the suite under: $(command -v bash) $(bash --version | head -n 1)"
+          tests/run.sh
 
   # The build is the real check on the site: it fails on a duplicate slug, a
   # missing frontmatter title or a broken component, and it prerenders every
