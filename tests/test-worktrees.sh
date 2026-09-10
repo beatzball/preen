@@ -25,10 +25,11 @@ printf 'brand new\n' > "$wt/untracked.txt"
 base="$(git -C "$wt" merge-base main HEAD)"
 
 # ---- the count --------------------------------------------------------------
-count="$( { git -C "$wt" -c core.quotePath=false diff --name-only "$base"
-            git -C "$wt" -c core.quotePath=false ls-files --others --exclude-standard
-          } | sort -u | wc -l | tr -d ' ')"
-assert_eq "$count" "2" "count covers the committed, uncommitted and untracked file"
+# Taken from preen's own worktree list, not rebuilt from git here: a test that
+# re-runs the git commands grades its own copy of them and keeps passing after
+# bin/preen changes underneath it.
+count="$(preen_list "$d" worktrees | head -n 1 | awk '{print $1}')"
+assert_eq "$count" "2" "count covers f.txt, committed and uncommitted, plus the untracked file"
 
 # ---- level one: the preview has to show every file the count counted --------
 s="$(preen_state wt sbs "" "")"
@@ -55,9 +56,7 @@ tgit -C "$d" add -A; tgit -C "$d" commit -qm "main moves on"
 out="$(preview "$s" "$wt")"
 assert_not_contains "$out" "main-only.txt" "a later commit on main stays out of the diff"
 
-count2="$( { git -C "$wt" -c core.quotePath=false diff --name-only "$(git -C "$wt" merge-base main HEAD)"
-             git -C "$wt" -c core.quotePath=false ls-files --others --exclude-standard
-           } | sort -u | wc -l | tr -d ' ')"
+count2="$(preen_list "$d" worktrees | head -n 1 | awk '{print $1}')"
 assert_eq "$count2" "2" "count is unchanged by main moving on"
 
 # ---- the main checkout is not in the list -----------------------------------

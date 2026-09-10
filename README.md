@@ -266,13 +266,19 @@ right.
   `snacks.nvim` does it in Neovim.
 - Inline images do not work. tmux swallows the kitty graphics escapes and dumps
   the payload into the pane title. `mdcat` was tested and dropped for this reason.
-- **An odd filename is listed and opened as itself.** A quote, a backslash or
-  a newline in a name is escaped by git on output whatever `core.quotePath`
-  says, and a name that comes back escaped cannot then be opened, so every
-  file list is asked for with `-z` and handed to fzf with `--read0`. The one
-  exception is `pr` mode: its list comes from `gh pr diff --name-only`, which
-  has no NUL form, so a PR touching a file whose name contains a newline
-  cannot be spelled there.
+- **An odd filename is listed and opened as itself.** A quote, a backslash, a
+  tab or a newline in a name is escaped by git on output whatever
+  `core.quotePath` says, and a name that comes back escaped is listed but
+  cannot then be opened. So every file list is asked for with `-z` and handed
+  to fzf with `--read0`, and `pr` mode decodes the C-quoted path git writes
+  into a `diff --git` header — which is how an accented name arrives from the
+  GitHub API. The one name `pr` mode still cannot spell is one containing a
+  **newline**: its list comes from `gh pr diff --name-only`, which has no NUL
+  form and separates its output with a newline. Every other mode carries that
+  too.
+- **fzf 0.53 or newer draws a name containing a newline on more than one line.**
+  `--read0` itself has been in fzf since 0.15, so an older fzf still treats such
+  a name as one entry and still opens it; it just draws it on a single line.
 - `demo/kitchen-sink.md` exercises every markdown feature. Use it to check a theme:
   `preen demo/kitchen-sink.md`.
 

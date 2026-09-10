@@ -151,7 +151,9 @@ wt_list() {
     [ -n "$root" ] || { root="$path"; continue; }
     base="$(wt_base "$path" 2>/dev/null)"
     n=0
-    while IFS= read -r -d '' f; do n=$((n + 1)); done < <(wt_files "$path" "$base")
+    while IFS= read -r -d '' f; do
+      [ -n "$f" ] && n=$((n + 1))
+    done < <(wt_files "$path" "$base")
     [ "$n" = 1 ] && word=file || word=files
     printf '%4s %-5s  %-24s  %s\t%s\0' \
       "$n" "$word" "$(wt_branch "$path")" "${path#"$root"/}" "$path"
@@ -191,13 +193,76 @@ render_wt() {
 # status, pr view, and pr diff twice (the diff itself, then --name-only for the
 # file list). The diff is cached in the state dir and each preview slices its
 # own file out of it, so nothing goes to the network per file.
-# The header line is "diff --git a/PATH b/PATH"; match on the " b/PATH" tail so
-# a path that itself contains " b/" does not confuse the split.
+# The header line is "diff --git a/PATH b/PATH", and git C-quotes the whole
+# path -- `"b/say\"hi.md"` -- when it holds a quote, a backslash, a control
+# character or any byte above 0x7f. It does that whatever core.quotePath says,
+# and a PR diff arrives from the API in that form, so a plain " b/PATH" tail
+# match previews an accented or an odd name as blank. Decode the header instead.
+#
+# The name is passed in the environment, not with `awk -v`, which expands escape
+# sequences in the value it is given and turns `back\slash.md` into
+# `backslash.md`. `gh pr diff --name-only` has no NUL form and its escaping is
+# its own business, so a name that arrives already quoted is compared both ways.
+#
+# LC_ALL=C so `\NNN` decodes to one byte: a UTF-8 name is several of them.
 pr_slice() {
-  awk -v f="$1" '
+  PREEN_PR_FILE="$1" LC_ALL=C awk '
+    # git C-quoted -> the bytes it stands for
+    function unq(s,   out, i, c, n) {
+      out = ""
+      s = substr(s, 2, length(s) - 2)
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c != "\\") { out = out c; continue }
+        i++
+        c = substr(s, i, 1)
+        if      (c == "n") out = out "\n"
+        else if (c == "t") out = out "\t"
+        else if (c == "r") out = out "\r"
+        else if (c == "a") out = out "\a"
+        else if (c == "b") out = out "\b"
+        else if (c == "f") out = out "\f"
+        else if (c == "v") out = out "\v"
+        else if (c >= "0" && c <= "7") {
+          n = (substr(s, i, 1) * 64) + (substr(s, i+1, 1) * 8) + substr(s, i+2, 1)
+          out = out sprintf("%c", n)
+          i += 2
+        }
+        else out = out c            # \" and \\ stand for themselves
+      }
+      return out
+    }
+    function quoted(s) {
+      return (length(s) > 1 && substr(s, 1, 1) == "\"" \
+              && substr(s, length(s), 1) == "\"")
+    }
+    # the b-path of a header, decoded. Empty when the header is not quoted: an
+    # unquoted path may contain a space, which makes the a/b split ambiguous,
+    # and the tail match settles that case instead.
+    function bpath(line,   i, bs, start) {
+      if (substr(line, length(line), 1) != "\"") return ""
+      for (i = length(line) - 1; i > 11; i--) {
+        if (substr(line, i, 1) != "\"") continue
+        bs = 0
+        while (substr(line, i - 1 - bs, 1) == "\\") bs++
+        if (bs % 2 == 0) { start = i; break }
+      }
+      if (!start) return ""
+      return substr(unq(substr(line, start, length(line) - start + 1)), 3)
+    }
+    BEGIN {
+      f = ENVIRON["PREEN_PR_FILE"]
+      g = quoted(f) ? unq(f) : f          # in case gh handed us a quoted name
+      tf = " b/" f
+      tg = " b/" g
+    }
     /^diff --git / {
-      tail = " b/" f
-      inblk = (substr($0, length($0) - length(tail) + 1) == tail)
+      b = bpath($0)
+      if (b != "")
+        inblk = (b == f || b == g)
+      else
+        inblk = (substr($0, length($0) - length(tf) + 1) == tf \
+              || substr($0, length($0) - length(tg) + 1) == tg)
     }
     inblk { print }
   ' "$2"
@@ -472,7 +537,12 @@ wt_loop() {
     PROMPT='  file ❯ '
     if [ ${#FILES[@]} -gt 0 ]; then
       echo diff > "$PREEN_STATE/kind"
-      EDIT="\"$dir\"/{}"
+      # The worktree path goes through the environment, not through the
+      # command text: pasted in, a path holding a quote opened the wrong file
+      # silently, and one holding $(...) or a backtick ran it. fzf quotes {}
+      # itself, and the shell running the bind expands PREEN_WT_DIR safely.
+      export PREEN_WT_DIR="$dir"
+      EDIT='"$PREEN_WT_DIR"/{}'
       ENTER="execute($SELF --show {})"
       HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc back'
     else

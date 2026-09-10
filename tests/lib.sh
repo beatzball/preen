@@ -146,14 +146,65 @@ preen_list_raw() {
   local out="$1" cwd="$2"; shift 2
   local shim
   shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-shim.XXXXXX")"
+  # Truncate both, so a run that dies before reaching fzf leaves an empty list
+  # rather than the previous call's one for the next assertions to grade.
+  : > "$out"; : > "$out.argv"
   cat > "$shim/fzf" <<EOF
 #!/bin/sh
+printf '%s\n' "\$@" > "$out.argv"
 cat > "$out"
 exit 0
 EOF
   chmod +x "$shim/fzf"
   ( cd "$cwd" && PATH="$shim:$PATH" "$PREEN" "$@" >/dev/null 2>&1 )
   rm -rf "$shim"
+}
+
+preen_list_raw2() {
+  # preen_list_raw2 <outfile> <cwd> <preen args...>
+  #   -> the SECOND list preen builds, plus the flags that went with it
+  #
+  # worktrees mode has two levels, and the shim above only ever sees the first:
+  # it prints nothing, so `sel` comes back empty and the loop stops. This shim
+  # accepts the first record instead, which is what drives preen into level two,
+  # and captures that list and its flags. The third call returns nothing so the
+  # loop ends rather than cycling for ever.
+  local out="$1" cwd="$2"; shift 2
+  local shim
+  shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-shim2.XXXXXX")"
+  : > "$out"; : > "$out.argv"; rm -f "$out.n"
+  cat > "$shim/fzf" <<EOF
+#!/bin/sh
+n=\$(cat "$out.n" 2>/dev/null || echo 0)
+n=\$((n + 1)); printf '%s' "\$n" > "$out.n"
+case "\$n" in
+  1) cat > "$out.level1"
+     # the record fzf would print on enter: label, a tab, then the path
+     tr '\0' '\n' < "$out.level1" | head -n 1 ;;
+  2) printf '%s\n' "\$@" > "$out.argv"
+     cat > "$out" ;;
+  *) cat > /dev/null ;;
+esac
+exit 0
+EOF
+  chmod +x "$shim/fzf"
+  ( cd "$cwd" && PATH="$shim:$PATH" "$PREEN" "$@" >/dev/null 2>&1 )
+  rm -rf "$shim"
+}
+
+list_bind() {
+  # list_bind <raw-list-file> <key> -> the --bind preen set for that key
+  list_flags "$1" | sed -n "s/^$2://p"
+}
+
+list_flags() {
+  # list_flags <raw-list-file> -> the arguments preen gave fzf, one per line
+  #
+  # The list being NUL-framed is only half of it: fzf splits on newline unless
+  # it is told otherwise, so a name containing one arrives as two entries even
+  # from a perfect list. Nothing else in the suite can see a flag, because the
+  # shim stands where fzf would.
+  cat "$1.argv" 2>/dev/null
 }
 
 preen_list() {
@@ -176,7 +227,10 @@ preen_list() {
 
 list_names_py='
 import sys, os
-raw = open(sys.argv[1], "rb").read()
+try:
+    raw = open(sys.argv[1], "rb").read()
+except OSError:
+    sys.exit(1)
 names = [n for n in raw.split(b"\0") if n]
 '
 
@@ -191,14 +245,40 @@ list_holds_name() {
   # list_holds_name <raw-list-file> <name>
   #   -> exit 0 if the name's own bytes appear in the list, as they are
   #
-  # Deliberately blind to what separates the entries: this asks only whether
-  # git escaped the name, which is the half of the bug that -z fixes and the
-  # half that a name with a quote or a backslash fails on all by itself.
+  # Deliberately blind to WHICH byte separates the entries -- NUL or newline --
+  # so it asks only whether git escaped the name. That is the half of the bug
+  # `-z` fixes, and a quote or a backslash fails it on its own, whatever the
+  # framing. It does insist on a boundary at each end: without that,
+  # `plain.txt` would be found inside `untracked-plain.txt` and the assertion
+  # would pass for the wrong entry.
   python3 -c '
 import sys, os
-raw = open(sys.argv[1], "rb").read()
-sys.exit(0 if os.fsencode(sys.argv[2]) in raw else 1)
+try:
+    raw = open(sys.argv[1], "rb").read()
+except OSError:
+    sys.exit(1)
+n = os.fsencode(sys.argv[2])
+i = raw.find(n)
+while i != -1:
+    before = i == 0 or raw[i-1:i] in (b"\0", b"\n")
+    j = i + len(n)
+    after = j == len(raw) or raw[j:j+1] in (b"\0", b"\n")
+    if before and after:
+        sys.exit(0)
+    i = raw.find(n, i + 1)
+sys.exit(1)
 ' "$1" "$2"
+}
+
+list_in_order() {
+  # list_in_order <raw-list-file> -> exit 0 if the entries are in byte order
+  #
+  # The picker shows the list in the order preen hands it over, and preen sorts
+  # it. `sort -u` on a NUL-delimited stream sees one enormous line and sorts
+  # nothing, so this is what notices a `-z` going missing from a sort.
+  python3 -c "$list_names_py"'
+sys.exit(0 if names == sorted(names) else 1)
+' "$1"
 }
 
 list_count() {

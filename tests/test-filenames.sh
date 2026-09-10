@@ -86,6 +86,21 @@ done < "$raw"
 assert_eq "$blank" "" "every entry in the list previews"
 assert_eq "$seen" "$(list_count "$raw")" "that loop saw every entry"
 
+# 4. The picker has to be told how to read that list. A perfect NUL-framed
+#    list still arrives as two entries if fzf is left splitting on newline,
+#    which is the same bug one layer further on. The shim records the flags
+#    preen passed, and real fzf shows what the flag is worth.
+printf '%s\n' "$(list_flags "$raw")" | grep -qx -- '--read0'
+assert_true $? "fzf is told to read the list on NUL (--read0)"
+
+# fzf --filter needs no terminal, so the real binary can be asked directly.
+# Same bytes, once with the flag and once without.
+n_with="$(fzf --read0 --filter='' --print0 < "$raw" | list_count /dev/stdin)"
+n_without="$(fzf --filter='' --print0 < "$raw" | list_count /dev/stdin)"
+assert_eq "$n_with" "$(list_count "$raw")" "real fzf keeps one entry per file with --read0"
+[ "$n_without" != "$n_with" ]
+assert_true $? "real fzf splits the list differently without it — the flag is what does the work"
+
 # ---- a leading dash ---------------------------------------------------------
 # Safe only because every call site puts `--` before the path. Without that git
 # reads the name as an option and the preview dies.
@@ -106,22 +121,49 @@ wtroot="$(mktemp -d "${TMPDIR:-/tmp}/preen-wtroot.XXXXXX")"
 wt="$wtroot/w"
 git -C "$d" worktree add -q -b odd "$wt" 2>/dev/null
 
-# Names of their own, not the ones committed above: written over a tracked
-# file these would be modifications, and the untracked half of wt_files --
-# the half #3 is about -- would never be reached.
+# wt_files has two halves, built by two different git commands, and a fixture
+# that only writes new files exercises one of them. So: three names of their
+# own for the untracked half...
 printf 'MARKER-quote\n'   > "$wt/wt\"quote.txt"
 printf 'MARKER-slash\n'   > "$wt/wt\\slash.txt"
 printf 'MARKER-newline\n' > "$wt/"$'wt\nnewline.txt'
+# ...and a modification to a name the repo already tracks for the other half.
+# It has to be an odd name too: `diff --name-only` escapes it exactly the way
+# `ls-files --others` does, so a plain name here would prove nothing.
+printf 'MARKER-tracked\n' >> "$wt/"$'two\nlines.txt'
 
 swt="$(preen_state wt sbs "" "")"
 out="$(preview "$swt" "$wt")"
 assert_contains "$out" "MARKER-quote"   "worktree preview opens a name with a quote"
 assert_contains "$out" "MARKER-slash"   "worktree preview opens a name with a backslash"
 assert_contains "$out" "MARKER-newline" "worktree preview opens a name with a newline"
+assert_contains "$out" "MARKER-tracked" "worktree preview shows a TRACKED odd name too (the diff half of wt_files)"
+
+# ---- worktrees level two -----------------------------------------------------
+# The file list inside a worktree, which nothing else in the suite reaches: the
+# ordinary shim stops at level one. Same contract as diff mode — one entry per
+# file, spelled as itself.
+raw2="$(mktemp "${TMPDIR:-/tmp}/preen-raw2.XXXXXX")"
+preen_list_raw2 "$raw2" "$d" worktrees
+for n in 'wt"quote.txt' 'wt\slash.txt' $'wt\nnewline.txt' $'two\nlines.txt'; do
+  list_has "$raw2" "$n"
+  assert_true $? "worktree level two lists as one entry: $(q "$n")"
+done
+assert_eq "$(list_count "$raw2")" "4" "worktree level two holds one entry per file"
+
+# ctrl-e opens the file in the worktree, so the worktree's own path has to
+# reach the editor — and it must not reach it as command text. This worktree is
+# called `wt` and lives under a path with no metacharacters, so the check is on
+# the shape: fzf quotes {} itself, and the path is spent as a variable the
+# executing shell expands, never pasted in.
+bind="$(list_bind "$raw2" 'ctrl-e')"
+assert_contains "$bind" 'PREEN_WT_DIR' "ctrl-e takes the worktree path from the environment"
+assert_not_contains "$bind" "$wt" "ctrl-e does not paste the worktree path into the command"
+rm -f "$raw2" "$raw2.argv" "$raw2.n" "$raw2.level1"
 
 count="$(preen_list "$d" worktrees | head -n 1 | awk '{print $1}')"
 shown="$(printf '%s\n' "$out" | grep -c 'MARKER-')"
-assert_eq "$count" "3" "the worktree counts all three odd names"
+assert_eq "$count" "4" "the worktree counts all four odd names, tracked and untracked"
 assert_eq "$shown" "$count" "count and level-one preview agree"
 rm -rf "$swt"
 git -C "$d" worktree remove --force "$wt" 2>/dev/null
@@ -141,32 +183,108 @@ for n in "${md_names[@]}"; do
   assert_true $? "md mode lists as one entry: $(q "$n")"
 done
 
-# ---- pr mode: gh has no -z, so the list is whatever gh printed --------------
-# A name with a space or a quote has to survive being carried into the list —
-# it would not if the list were rebuilt by word splitting. A name containing a
-# newline cannot be represented here at all: gh separates its output with one.
-shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-gh.XXXXXX")"
-cat > "$shim/gh" <<'GH'
+# ---- pr mode ----------------------------------------------------------------
+# Two separate things to hold shut here.
+#
+# The list: gh has no -z, so it is newline-delimited whatever preen does. A name
+# with a space or a quote still has to survive being carried into it — it would
+# not if the list were rebuilt by word splitting. A name containing a newline
+# cannot be represented here at all, because gh separates its output with one.
+#
+# The preview: git C-quotes the WHOLE path in a `diff --git` header when the
+# name holds a quote, a backslash, a control character or a byte above 0x7f,
+# whatever core.quotePath says — so an accented name arrives from the API as
+# `"b/caf\303\251.md"`. A tail match on " b/NAME" never matches that, and the
+# preview came back blank: issue #3's symptom, in the one mode where the file
+# being empty and the file being unfindable look identical.
+# The diff the stub serves is generated by real git, NOT written out here: the
+# quoting in a `diff --git` header is git's own, and inventing it would grade
+# this file's idea of the format rather than the format. No core.quotePath=false
+# either — this is the spelling the GitHub API returns, where an accented name
+# is octal-escaped as well.
+prd="$(mktemp -d "${TMPDIR:-/tmp}/preen-prsrc.XXXXXX")"
+git init -q -b main "$prd"
+pr_names=( 'plain.txt' 'with space.txt' 'has"quote.txt' 'back\slash.txt'
+           $'tab\there.txt' 'café.txt' )
+i=0
+for n in "${pr_names[@]}"; do printf 'PR-%s-before\n' "$i" > "$prd/$n"; i=$((i + 1)); done
+tgit -C "$prd" add -A; tgit -C "$prd" commit -qm pr
+i=0
+for n in "${pr_names[@]}"; do printf 'PR-%s-after\n' "$i" >> "$prd/$n"; i=$((i + 1)); done
+git -C "$prd" diff HEAD > "$prd/pr.diff"
+
+# Nobody here knows which spelling the real `gh pr diff --name-only` prints for
+# a name git would quote — gh parses the patch itself and preen never sees the
+# repository. So run it both ways: `raw`, and the C-quoted spelling git uses.
+# The list may end up showing either, but every entry in it has to open.
+pr_run() {
+  # pr_run <raw|quoted> -> stubs gh, builds the list into $raw
+  local how="$1"
+  shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-gh.XXXXXX")"
+  if [ "$how" = quoted ]; then
+    ( cd "$prd" && git diff --name-only HEAD ) > "$shim/names"
+  else
+    printf '%s\n' "${pr_names[@]}" > "$shim/names"
+  fi
+  cat > "$shim/gh" <<GH
 #!/bin/sh
-case "$1 $2" in
+case "\$1 \$2" in
   "auth status") exit 0 ;;
   "pr view")     printf '7\tOdd names\n'; exit 0 ;;
   "pr diff")
-    for a in "$@"; do [ "$a" = "--name-only" ] && {
-      printf 'plain.txt\nwith space.txt\nhas"quote.txt\nback\\slash.txt\n'; exit 0; }
-    done
-    printf 'diff --git a/plain.txt b/plain.txt\n@@ -1 +1 @@\n-a\n+b\n'
+    for a in "\$@"; do [ "\$a" = "--name-only" ] && { cat "$shim/names"; exit 0; }; done
+    cat "$prd/pr.diff"
     exit 0 ;;
 esac
 exit 1
 GH
-chmod +x "$shim/gh"
+  chmod +x "$shim/gh"
+  PATH="$shim:$PATH" preen_list_raw "$raw" "$d" pr 7
+}
 
-PATH="$shim:$PATH" preen_list_raw "$raw" "$d" pr 7
-for n in 'plain.txt' 'with space.txt' 'has"quote.txt' 'back\slash.txt'; do
+spr="$(preen_state pr sbs "" "")"
+cp "$prd/pr.diff" "$spr/pr.diff"
+
+for how in raw quoted; do
+  pr_run "$how"
+
+  assert_eq "$(list_count "$raw")" "${#pr_names[@]}" \
+    "pr/$how: one entry per file in the PR"
+
+  # Every entry in the list opens, and opens on ITS OWN file. The content is
+  # unique per file, because the rendered diff header carries git's escaped
+  # spelling of the name rather than the name, so matching on the name would
+  # grade the wrong thing.
+  # Which order gh lists them in is gh's business, so this collects the marker
+  # each preview carried and checks the SET: every file exactly once means no
+  # entry opened a neighbour's block and none opened nothing.
+  blank=""; seen=0; marks=""
+  while IFS= read -r -d '' entry || [ -n "$entry" ]; do
+    out="$(preview "$spr" "$entry")"
+    [ -n "$out" ] || blank="$blank $(q "$entry")"
+    marks="$marks$(printf '%s\n' "$out" | grep -o 'PR-[0-9]*-after' | sort -u)
+"
+    seen=$((seen + 1)); entry=""
+  done < "$raw"
+
+  want=""
+  i=0; while [ "$i" -lt "${#pr_names[@]}" ]; do want="$want PR-$i-after"; i=$((i + 1)); done
+  got="$(printf '%s' "$marks" | grep -v '^$' | sort | tr '\n' ' ' | sed 's/ $//')"
+
+  assert_eq "$seen"  "${#pr_names[@]}" "pr/$how: that loop saw every entry"
+  assert_eq "$blank" ""                "pr/$how: every entry in the list previews"
+  assert_eq "$got" "${want# }"         "pr/$how: each entry previewed its own file, exactly once"
+  rm -rf "$shim"
+done
+
+# The list itself: with the raw spelling, each name has to survive being
+# carried into it — it would not if the list were rebuilt by word splitting.
+pr_run raw
+for n in "${pr_names[@]}"; do
   list_has "$raw" "$n"
   assert_true $? "pr mode carries gh's name through whole: $(q "$n")"
 done
+rm -rf "$spr" "$prd" "$shim"; shim=""
 
 # ---- ordinary names are untouched by any of this ----------------------------
 # None of the above may change behaviour for the names everyone actually uses.
