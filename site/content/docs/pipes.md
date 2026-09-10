@@ -1,6 +1,6 @@
 ---
 title: Pipes
-description: Pipe a diff or some markdown into preen and it renders it and quits.
+description: Pipe a diff or some markdown into preen and it renders it, paged.
 sidebar:
   order: 3
 ---
