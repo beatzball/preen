@@ -136,21 +136,162 @@ snapshot() {
 # So put a fake `fzf` first on PATH that writes its stdin out and exits. What
 # that captures is exactly the list the real picker would have been given.
 
-preen_list() {
-  # preen_list <cwd> <preen args...> -> the list preen hands fzf, one per line
-  local cwd="$1"; shift
-  local shim out
+preen_list_raw() {
+  # preen_list_raw <outfile> <cwd> <preen args...>
+  #   -> the exact bytes preen hands fzf, written to <outfile>
+  #
+  # A file, not a string, because the list is NUL-delimited and a filename may
+  # contain a newline: bash cannot hold a NUL, and "$(...)" would drop the
+  # separators and glue two names into one.
+  local out="$1" cwd="$2"; shift 2
+  local shim
+  [ -n "$out" ] || { printf '  FAIL: preen_list_raw was given no outfile\n'; return 1; }
   shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-shim.XXXXXX")"
-  out="$shim/list"
+  # Truncate both, so a run that dies before reaching fzf leaves an empty list
+  # rather than the previous call's one for the next assertions to grade.
+  : > "$out"; : > "$out.argv"
   cat > "$shim/fzf" <<EOF
 #!/bin/sh
+printf '%s\n' "\$@" > "$out.argv"
 cat > "$out"
 exit 0
 EOF
   chmod +x "$shim/fzf"
   ( cd "$cwd" && PATH="$shim:$PATH" "$PREEN" "$@" >/dev/null 2>&1 )
-  cat "$out" 2>/dev/null
   rm -rf "$shim"
+}
+
+preen_list_raw2() {
+  # preen_list_raw2 <outfile> <cwd> <preen args...>
+  #   -> the SECOND list preen builds, plus the flags that went with it
+  #
+  # worktrees mode has two levels, and the shim above only ever sees the first:
+  # it prints nothing, so `sel` comes back empty and the loop stops. This shim
+  # accepts the first record instead, which is what drives preen into level two,
+  # and captures that list and its flags. The third call returns nothing so the
+  # loop ends rather than cycling for ever.
+  #
+  # The record is fed back a line at a time, so this seam cannot drive a
+  # worktree whose own directory name contains a newline. The files inside one
+  # are what it is for, and those it carries whole.
+  local out="$1" cwd="$2"; shift 2
+  local shim
+  [ -n "$out" ] || { printf '  FAIL: preen_list_raw2 was given no outfile\n'; return 1; }
+  shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-shim2.XXXXXX")"
+  : > "$out"; : > "$out.argv"; rm -f "$out.n"
+  cat > "$shim/fzf" <<EOF
+#!/bin/sh
+n=\$(cat "$out.n" 2>/dev/null || echo 0)
+n=\$((n + 1)); printf '%s' "\$n" > "$out.n"
+case "\$n" in
+  1) cat > "$out.level1"
+     # the record fzf would print on enter: label, a tab, then the path
+     tr '\0' '\n' < "$out.level1" | head -n 1 ;;
+  2) printf '%s\n' "\$@" > "$out.argv"
+     cat > "$out" ;;
+  *) cat > /dev/null ;;
+esac
+exit 0
+EOF
+  chmod +x "$shim/fzf"
+  ( cd "$cwd" && PATH="$shim:$PATH" "$PREEN" "$@" >/dev/null 2>&1 )
+  rm -rf "$shim"
+}
+
+list_bind() {
+  # list_bind <raw-list-file> <key> -> the --bind preen set for that key
+  list_flags "$1" | sed -n "s/^$2://p"
+}
+
+list_flags() {
+  # list_flags <raw-list-file> -> the arguments preen gave fzf, one per line
+  #
+  # The list being NUL-framed is only half of it: fzf splits on newline unless
+  # it is told otherwise, so a name containing one arrives as two entries even
+  # from a perfect list. Nothing else in the suite can see a flag, because the
+  # shim stands where fzf would.
+  cat "$1.argv" 2>/dev/null
+}
+
+preen_list() {
+  # preen_list <cwd> <preen args...> -> the list preen hands fzf, one per line
+  #
+  # For the many names that hold no newline this is the readable form. A test
+  # about a name that does hold one wants preen_list_raw and list_has.
+  local cwd="$1"; shift
+  local raw; raw="$(mktemp "${TMPDIR:-/tmp}/preen-list.XXXXXX")"
+  preen_list_raw "$raw" "$cwd" "$@"
+  tr '\0' '\n' < "$raw"
+  rm -f "$raw" "$raw.argv"       # the recorded flags go with it
+}
+
+# ---- asking a NUL-delimited list about one name -----------------------------
+#
+# python3 rather than grep or awk: the entries are separated by NUL and one of
+# them contains a newline, which is exactly the pair of bytes the line-oriented
+# tools cannot both handle. It is already a dependency of with_tty below.
+
+list_names_py='
+import sys, os
+try:
+    raw = open(sys.argv[1], "rb").read()
+except OSError:
+    sys.exit(1)
+names = [n for n in raw.split(b"\0") if n]
+'
+
+list_has() {
+  # list_has <raw-list-file> <name> -> exit 0 if the list holds exactly <name>
+  python3 -c "$list_names_py"'
+sys.exit(0 if os.fsencode(sys.argv[2]) in names else 1)
+' "$1" "$2"
+}
+
+list_holds_name() {
+  # list_holds_name <raw-list-file> <name>
+  #   -> exit 0 if the name's own bytes appear in the list, as they are
+  #
+  # Deliberately blind to WHICH byte separates the entries -- NUL or newline --
+  # so it asks only whether git escaped the name. That is the half of the bug
+  # `-z` fixes, and a quote or a backslash fails it on its own, whatever the
+  # framing. It does insist on a boundary at each end: without that,
+  # `plain.txt` would be found inside `untracked-plain.txt` and the assertion
+  # would pass for the wrong entry.
+  python3 -c '
+import sys, os
+try:
+    raw = open(sys.argv[1], "rb").read()
+except OSError:
+    sys.exit(1)
+n = os.fsencode(sys.argv[2])
+i = raw.find(n)
+while i != -1:
+    before = i == 0 or raw[i-1:i] in (b"\0", b"\n")
+    j = i + len(n)
+    after = j == len(raw) or raw[j:j+1] in (b"\0", b"\n")
+    if before and after:
+        sys.exit(0)
+    i = raw.find(n, i + 1)
+sys.exit(1)
+' "$1" "$2"
+}
+
+list_in_order() {
+  # list_in_order <raw-list-file> -> exit 0 if the entries are in byte order
+  #
+  # The picker shows the list in the order preen hands it over, and preen sorts
+  # it. `sort -u` on a NUL-delimited stream sees one enormous line and sorts
+  # nothing, so this is what notices a `-z` going missing from a sort.
+  python3 -c "$list_names_py"'
+sys.exit(0 if names == sorted(names) else 1)
+' "$1"
+}
+
+list_count() {
+  # list_count <raw-list-file> -> how many entries the list holds
+  python3 -c "$list_names_py"'
+print(len(names))
+' "$1"
 }
 
 # ---- satisfying preen's dependency gates ------------------------------------

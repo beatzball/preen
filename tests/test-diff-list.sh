@@ -12,7 +12,7 @@ set -u
 . "$(dirname "$0")/lib.sh"
 
 d="$(new_repo)"; s=""; e=""
-trap 'rm -rf "$d" "$s" "$e"' EXIT
+trap 'rm -rf "$d" "$s" "$e" "${_preen_dep_shim:-}"' EXIT
 
 mkdir -p "$d/sub"
 printf 'deep\n' > "$d/sub/deep.txt"
@@ -76,3 +76,35 @@ assert_eq "$?" "1" "the fixture really has no HEAD"
 
 got="$(preen_list "$e" diff | tr '\n' ' ')"
 assert_eq "$got" "a.txt " "list in a repository with no commit"
+
+# ---- the list is in order ----------------------------------------------------
+# What the picker shows is the order preen hands over. The two halves arrive
+# unsorted — every tracked name first, then every untracked one — so this holds
+# only because the list is sorted after they are joined, and it is what notices
+# a sort that has stopped seeing the entries.
+#
+# Its own repository, so it cannot disturb the fixture above.
+# The names are chosen so that byte order and a collating locale disagree:
+# LC_ALL=C puts every capital before every lowercase and sorts punctuation by
+# its byte, while en_US.UTF-8 folds case and ignores the leading punctuation.
+# So this also fails if the sorts stop pinning the locale, whatever locale the
+# person running the suite happens to have.
+o_repo="$(new_repo)"
+printf 'zz\n' > "$o_repo/zz-tracked.txt"
+printf 'zz\n' > "$o_repo/Zebra.txt"
+printf 'zz\n' > "$o_repo/_under.txt"
+tgit -C "$o_repo" add -A; tgit -C "$o_repo" commit -qm ordering
+printf 'more\n' >> "$o_repo/zz-tracked.txt"
+printf 'more\n' >> "$o_repo/Zebra.txt"
+printf 'more\n' >> "$o_repo/_under.txt"
+printf 'new\n'  > "$o_repo/aa-untracked.txt"
+printf 'new\n'  > "$o_repo/-dash.txt"
+
+o="$(mktemp "${TMPDIR:-/tmp}/preen-order.XXXXXX")"
+preen_list_raw "$o" "$o_repo" diff
+assert_eq "$(preen_list "$o_repo" diff | tr '\n' ' ')" \
+  "-dash.txt Zebra.txt _under.txt aa-untracked.txt zz-tracked.txt " \
+  "the list is in byte order, whatever locale the suite is run in"
+list_in_order "$o"
+assert_true $? "the list is sorted, tracked and untracked names together"
+rm -f "$o" "$o.argv"; rm -rf "$o_repo"

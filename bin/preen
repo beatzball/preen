@@ -30,8 +30,8 @@ render_md() {
 # are added.
 #
 # It does not cover everything: git always escapes a double quote, a backslash
-# and control characters whatever this is set to, so a filename containing one
-# is still broken. That needs -z and `read -d ""` at every path-output site.
+# and control characters whatever this is set to. That is why every list of
+# paths is asked for with -z as well -- see collect_files below.
 gitw() {
   local d="$1"; shift
   if [ -n "$d" ]; then
@@ -39,6 +39,28 @@ gitw() {
   else
     git -c core.quotePath=false "$@"
   fi
+}
+
+# ---- lists of paths ----------------------------------------------------------
+# NUL is the one byte a filename cannot contain, and the one separator git will
+# not escape: core.quotePath=false still leaves a double quote, a backslash and
+# a newline quoted on output, and a newline splits a newline-delimited list into
+# two entries besides. So every list of paths is asked for with -z and read back
+# with `read -d ""`, all the way through to fzf, which is given --read0.
+#
+# Bash cannot hold a NUL inside a string, so the list lives in the FILES array
+# rather than in one variable. Empty records are dropped here, so no caller has
+# to filter them out again.
+collect_files() {
+  # collect_files < <(producer)   -> fills the FILES array
+  # Feed it by redirection, never through a pipe: a pipe runs this in a subshell
+  # and the array would not outlive it.
+  local p
+  FILES=()
+  while IFS= read -r -d '' p; do
+    [ -n "$p" ] || continue
+    FILES+=("$p")
+  done
 }
 
 render_diff() {
@@ -97,33 +119,45 @@ wt_files() {
   local d="$1" base="$2"
   {
     if [ -n "$base" ]; then
-      gitw "$d" diff --name-only "$base"
+      gitw "$d" diff --name-only -z "$base"
     else
-      gitw "$d" diff --name-only HEAD
+      gitw "$d" diff --name-only -z HEAD
     fi
-    gitw "$d" ls-files --others --exclude-standard
-  } 2>/dev/null | grep -v '^$' | sort -u
+    gitw "$d" ls-files --others --exclude-standard -z
+  } 2>/dev/null | LC_ALL=C sort -z -u
 }
 
-# one line per worktree: a padded label for the eye, then a tab and the absolute
-# path for the callbacks. git always prints the main checkout first, and that is
-# not what this mode is about, so the first record becomes the root and is
-# dropped from the list. The count leads because the list pane is narrow and a
-# long path is the one column that can afford to run off the end.
+# the worktree paths themselves. --porcelain -z is the only form that carries a
+# path with an odd character in it, and git learned it in 2.36; older git gets
+# the plain form reshaped to match, which carries a quote or a backslash fine
+# and stumbles only on a newline in a worktree's own directory name.
+wt_records() {
+  git worktree list --porcelain -z 2>/dev/null && return 0
+  git worktree list --porcelain 2>/dev/null | tr '\n' '\0'
+}
+
+# one record per worktree: a padded label for the eye, then a tab and the
+# absolute path for the callbacks. git always prints the main checkout first,
+# and that is not what this mode is about, so the first record becomes the root
+# and is dropped from the list. The count leads because the list pane is narrow
+# and a long path is the one column that can afford to run off the end.
+#
+# Everything here is NUL-terminated, so the count counts records: `wc -l` on a
+# -z stream answers 0.
 wt_list() {
-  git worktree list --porcelain 2>/dev/null \
-    | awk '/^worktree /{print substr($0, 10)}' \
-    | {
-        root=""
-        while IFS= read -r path; do
-          [ -n "$root" ] || { root="$path"; continue; }
-          base="$(wt_base "$path" 2>/dev/null)"
-          n="$(wt_files "$path" "$base" | wc -l | tr -d ' ')"
-          [ "$n" = 1 ] && word=file || word=files
-          printf '%4s %-5s  %-24s  %s\t%s\n' \
-            "$n" "$word" "$(wt_branch "$path")" "${path#"$root"/}" "$path"
-        done
-      }
+  local root="" rec path base n word f
+  while IFS= read -r -d '' rec; do
+    case "$rec" in "worktree "*) path="${rec#worktree }" ;; *) continue ;; esac
+    [ -n "$root" ] || { root="$path"; continue; }
+    base="$(wt_base "$path" 2>/dev/null)"
+    n=0
+    while IFS= read -r -d '' f; do
+      [ -n "$f" ] && n=$((n + 1))
+    done < <(wt_files "$path" "$base")
+    [ "$n" = 1 ] && word=file || word=files
+    printf '%4s %-5s  %-24s  %s\t%s\0' \
+      "$n" "$word" "$(wt_branch "$path")" "${path#"$root"/}" "$path"
+  done < <(wt_records)
 }
 
 # the level-one preview: what this worktree is, what it committed, what it changed
@@ -146,8 +180,8 @@ render_wt() {
     # counts untracked ones -- so without this a worktree could say "2 files"
     # and preview one. Each is shown whole, as an addition, exactly as the
     # per-file view does it.
-    gitw "$dir" ls-files --others --exclude-standard 2>/dev/null |
-      while IFS= read -r u; do
+    gitw "$dir" ls-files --others --exclude-standard -z 2>/dev/null |
+      while IFS= read -r -d '' u; do
         [ -n "$u" ] || continue
         gitw "$dir" diff --no-index --color=always -- /dev/null "$u" 2>/dev/null
       done
@@ -159,13 +193,81 @@ render_wt() {
 # status, pr view, and pr diff twice (the diff itself, then --name-only for the
 # file list). The diff is cached in the state dir and each preview slices its
 # own file out of it, so nothing goes to the network per file.
-# The header line is "diff --git a/PATH b/PATH"; match on the " b/PATH" tail so
-# a path that itself contains " b/" does not confuse the split.
+# The header line is "diff --git a/PATH b/PATH", and git C-quotes the whole
+# path -- `"b/say\"hi.md"` -- when it holds a quote, a backslash, a control
+# character or any byte above 0x7f. It does that whatever core.quotePath says,
+# and a PR diff arrives from the API in that form, so a plain " b/PATH" tail
+# match previews an accented or an odd name as blank. Decode the header instead.
+#
+# The name is passed in the environment, not with `awk -v`, which expands escape
+# sequences in the value it is given and turns `back\slash.md` into
+# `backslash.md`. `gh pr diff --name-only` has no NUL form and its escaping is
+# its own business, so a name that arrives already quoted is compared both ways.
+#
+# LC_ALL=C so `\NNN` decodes to one byte: a UTF-8 name is several of them.
 pr_slice() {
-  awk -v f="$1" '
+  PREEN_PR_FILE="$1" LC_ALL=C awk '
+    # git C-quoted -> the bytes it stands for
+    function unq(s,   out, i, c, n) {
+      out = ""
+      s = substr(s, 2, length(s) - 2)
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c != "\\") { out = out c; continue }
+        i++
+        c = substr(s, i, 1)
+        if      (c == "n") out = out "\n"
+        else if (c == "t") out = out "\t"
+        else if (c == "r") out = out "\r"
+        else if (c == "a") out = out "\a"
+        else if (c == "b") out = out "\b"
+        else if (c == "f") out = out "\f"
+        else if (c == "v") out = out "\v"
+        else if (c >= "0" && c <= "7") {
+          n = (substr(s, i, 1) * 64) + (substr(s, i+1, 1) * 8) + substr(s, i+2, 1)
+          out = out sprintf("%c", n)
+          i += 2
+        }
+        else out = out c            # \" and \\ stand for themselves
+      }
+      return out
+    }
+    # A name gh handed us in the C-quoted spelling. The interior backslash
+    # matters: git quotes a path only when it has something to escape, so a
+    # file whose name really is wrapped in quotes -- and holds no escape -- is
+    # left alone, rather than also matching a file named by its interior.
+    function quoted(s) {
+      return (length(s) > 2 && substr(s, 1, 1) == "\"" \
+              && substr(s, length(s), 1) == "\"" \
+              && index(substr(s, 2, length(s) - 2), "\\") > 0)
+    }
+    # the b-path of a header, decoded. Empty when the header is not quoted: an
+    # unquoted path may contain a space, which makes the a/b split ambiguous,
+    # and the tail match settles that case instead.
+    function bpath(line,   i, bs, start) {
+      if (substr(line, length(line), 1) != "\"") return ""
+      for (i = length(line) - 1; i > 11; i--) {
+        if (substr(line, i, 1) != "\"") continue
+        bs = 0
+        while (substr(line, i - 1 - bs, 1) == "\\") bs++
+        if (bs % 2 == 0) { start = i; break }
+      }
+      if (!start) return ""
+      return substr(unq(substr(line, start, length(line) - start + 1)), 3)
+    }
+    BEGIN {
+      f = ENVIRON["PREEN_PR_FILE"]
+      g = quoted(f) ? unq(f) : f          # in case gh handed us a quoted name
+      tf = " b/" f
+      tg = " b/" g
+    }
     /^diff --git / {
-      tail = " b/" f
-      inblk = (substr($0, length($0) - length(tail) + 1) == tail)
+      b = bpath($0)
+      if (b != "")
+        inblk = (b == f || b == g)
+      else
+        inblk = (substr($0, length($0) - length(tf) + 1) == tf \
+              || substr($0, length($0) - length(tg) + 1) == tg)
     }
     inblk { print }
   ' "$2"
@@ -374,11 +476,16 @@ export PREEN_STATE GLOW_STYLE
 # LABEL, HEADER, PROMPT, WITH_NTH (which fields are shown), PICK (which field
 # the callbacks are handed), EDIT (what ctrl-e opens) and ENTER (what enter
 # does), so a second level costs a few variables rather than a second block.
-FILES=""; LABEL=""; HEADER=""; PROMPT='  file ❯ '
+FILES=(); LABEL=""; HEADER=""; PROMPT='  file ❯ '
 WITH_NTH='..'; PICK='{}'; EDIT='{}'; ENTER=""
 
+# --read0 rather than a newline-delimited list: a filename may contain a
+# newline, and split on newline it would arrive as two entries, neither of them
+# openable. The ${FILES[@]+...} guard is for bash 3.2, which treats an empty
+# array as unset under set -u.
 run_picker() {
-  printf '%s\n' "$FILES" | fzf \
+  printf '%s\0' ${FILES[@]+"${FILES[@]}"} | fzf \
+    --read0 \
     --ansi --no-multi --cycle \
     --layout=reverse \
     --border=rounded \
@@ -416,7 +523,7 @@ wt_loop() {
   while :; do
     echo wt > "$PREEN_STATE/kind"
     : > "$PREEN_STATE/dir"; : > "$PREEN_STATE/rev"
-    FILES="$WTS"; WITH_NTH=1; PICK='{2}'; EDIT='{2}'; ENTER='accept'
+    FILES=(${WTS[@]+"${WTS[@]}"}); WITH_NTH=1; PICK='{2}'; EDIT='{2}'; ENTER='accept'
     LABEL=" preen · worktrees "
     PROMPT='  worktree ❯ '
     HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · esc quit'
@@ -427,20 +534,25 @@ wt_loop() {
     dir="${sel#*$'\t'}"
     base="$(wt_base "$dir" 2>/dev/null)"
     branch="$(wt_branch "$dir")"
-    FILES="$(wt_files "$dir" "$base")"
+    collect_files < <(wt_files "$dir" "$base")
     printf '%s' "$dir"  > "$PREEN_STATE/dir"
     printf '%s' "$base" > "$PREEN_STATE/rev"
     WITH_NTH='..'; PICK='{}'
     LABEL=" preen · wt · $branch "
     PROMPT='  file ❯ '
-    if [ -n "$FILES" ]; then
+    if [ ${#FILES[@]} -gt 0 ]; then
       echo diff > "$PREEN_STATE/kind"
-      EDIT="\"$dir\"/{}"
+      # The worktree path goes through the environment, not through the
+      # command text: pasted in, a path holding a quote opened the wrong file
+      # silently, and one holding $(...) or a backtick ran it. fzf quotes {}
+      # itself, and the shell running the bind expands PREEN_WT_DIR safely.
+      export PREEN_WT_DIR="$dir"
+      EDIT='"$PREEN_WT_DIR"/{}'
       ENTER="execute($SELF --show {})"
       HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc back'
     else
       echo none > "$PREEN_STATE/kind"
-      FILES="$branch has changed nothing against its merge-base"
+      FILES=("$branch has changed nothing against its merge-base")
       EDIT='{}'; ENTER='ignore'
       HEADER='esc  back to the worktree list'
     fi
@@ -454,15 +566,20 @@ LABEL=" preen · $KIND${REV:+ · $REV} "
 if [ "$KIND" = wt ]; then
   command -v delta >/dev/null || die "delta is not installed"
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
-  WTS="$(wt_list)"
-  [ -n "$WTS" ] \
+  collect_files < <(wt_list)
+  WTS=(${FILES[@]+"${FILES[@]}"})
+  [ ${#WTS[@]} -gt 0 ] \
     || die "no worktrees besides the main checkout (see: git worktree list)"
   wt_loop
   exit 0
 elif [ "$KIND" = md ]; then
   command -v delta >/dev/null || true
-  FILES="$(find "${TARGET:-.}" -type f \( -name '*.md' -o -name '*.markdown' \) \
-            -not -path '*/.git/*' -not -path '*/node_modules/*' | sed 's|^\./||' | sort)"
+  # -print0 for the same reason git gets -z: find is the only thing that knows
+  # the name, and a newline in it would otherwise arrive as two half-names.
+  collect_files < <(find "${TARGET:-.}" -type f \( -name '*.md' -o -name '*.markdown' \) \
+                      -not -path '*/.git/*' -not -path '*/node_modules/*' -print0 | LC_ALL=C sort -z)
+  i=0
+  while [ "$i" -lt ${#FILES[@]} ]; do FILES[$i]="${FILES[$i]#./}"; i=$((i + 1)); done
   HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nenter render · ctrl-e edit · ctrl-/ hide · esc quit'
 elif [ "$KIND" = pr ]; then
   # read-only: the PR is fetched over the API, never checked out, so the
@@ -475,7 +592,13 @@ elif [ "$KIND" = pr ]; then
   PRNUM="${META%%$'\t'*}"; PRTITLE="${META#*$'\t'}"
   gh pr diff "$PRNUM" > "$PREEN_STATE/pr.diff" 2>"$PREEN_STATE/pr.err" \
     || die "$(grep -v '^$' "$PREEN_STATE/pr.err" | head -n 1)"
-  FILES="$(gh pr diff "$PRNUM" --name-only 2>/dev/null)"
+  # gh has no -z, so this list is newline-delimited whatever preen does with
+  # it: a PR touching a file whose name contains a newline cannot be spelled
+  # here at all. Every other name is taken exactly as gh prints it.
+  FILES=()
+  while IFS= read -r prfile; do
+    [ -n "$prfile" ] && FILES+=("$prfile")
+  done < <(gh pr diff "$PRNUM" --name-only 2>/dev/null)
   LABEL=" preen · pr #$PRNUM · $(printf '%s' "$PRTITLE" | cut -c1-60) "
   HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc quit'
 else
@@ -489,20 +612,20 @@ else
   # both halves agree, and matches what "git preen" already does.
   ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" && cd "$ROOT" || true
   if [ -n "$REV" ]; then
-    FILES="$(gitw "" diff --name-only "$REV")"
+    collect_files < <(gitw "" diff --name-only -z "$REV")
+  elif git rev-parse --verify -q HEAD >/dev/null 2>&1; then
+    collect_files < <({ gitw "" diff --name-only -z HEAD
+                        gitw "" ls-files --others --exclude-standard -z
+                      } | LC_ALL=C sort -z -u)
   else
-    if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
-      FILES="$(gitw "" diff --name-only HEAD; gitw "" ls-files --others --exclude-standard)"
-    else
-      FILES="$(gitw "" diff --name-only --cached; gitw "" ls-files --others --exclude-standard)"
-    fi
-    FILES="$(printf '%s\n' "$FILES" | sort -u)"
+    collect_files < <({ gitw "" diff --name-only -z --cached
+                        gitw "" ls-files --others --exclude-standard -z
+                      } | LC_ALL=C sort -z -u)
   fi
   HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc quit'
 fi
 
-FILES="$(printf '%s\n' "$FILES" | grep -v '^$')"
-[ -n "$FILES" ] || die "nothing to show ($KIND mode)"
+[ ${#FILES[@]} -gt 0 ] || die "nothing to show ($KIND mode)"
 
 ENTER="execute($SELF --show {})"
 run_picker >/dev/null
