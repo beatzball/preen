@@ -211,9 +211,10 @@ tests/run.sh            # everything
 tests/run.sh worktrees  # one area
 ```
 
-Plain bash, no framework. Needs `git`, `delta` and `fzf`. Every test builds a
-throwaway repository under `$TMPDIR`, so nothing touches the checkout you run
-it from. `tests/README.md` explains how preen is driven without a terminal.
+Plain bash, no framework. Needs `git`, `delta`, `fzf` and `python3`. Every test
+builds a throwaway repository under `$TMPDIR`, so nothing touches the checkout
+you run it from. `tests/README.md` explains how preen is driven without a
+terminal, and why reaching that code needs a pty.
 
 ## Rebuilding the recordings
 
@@ -268,6 +269,11 @@ right.
   the payload into the pane title. `mdcat` was tested and dropped for this reason.
 - `demo/kitchen-sink.md` exercises every markdown feature. Use it to check a theme:
   `preen demo/kitchen-sink.md`.
+
+## Contributing
+
+[CONTRIBUTING.md](CONTRIBUTING.md) covers what to run before a pull request,
+where documentation goes, and what the `P0`-`P3` labels mean.
 
 ## License
 
