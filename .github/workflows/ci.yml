@@ -9,8 +9,10 @@ jobs:
   # gives it bash 5 and GNU coreutils; macOS gives it **bash 3.2.57** and the
   # BSD versions of sort, tr, find and awk. 3.2 is the last GPLv2 series
   # (2006); Apple stopped there because 4.0 went GPLv3, and 3.2.57 is its final
-  # patchlevel, from the 2014 Shellshock round. preen is a bash script that builds NUL-delimited path lists
-  # with `read -d ""`, `${arr[@]+"${arr[@]}"}` under `set -u`, `sort -z`,
+  # patchlevel, from the 2014 Shellshock round.
+  #
+  # preen is a bash script that builds NUL-delimited path lists with
+  # `read -d ""`, `${arr[@]+"${arr[@]}"}` under `set -u`, `sort -z`,
   # `find -print0` and an awk that decodes octal escapes. Every one of those is
   # somewhere the two platforms can disagree, and macOS is where preen is most
   # often run, so a green Linux job on its own says less than it looks.
@@ -49,23 +51,42 @@ jobs:
           echo "sort:  $(command -v sort)"
           echo "awk:   $(command -v awk)"
           echo "find:  $(command -v find)"
+          # PATH last, and in full: it is the only value the pin above changes.
+          # `command -v bash` cannot show that pin working, because /bin/bash
+          # is the only bash on the image today with or without it.
           if [ "$RUNNER_OS" = macOS ]; then echo "/bin:  $(ls /bin | tr '\n' ' ')"; fi
+          echo "PATH:  $PATH"
       # `|| exit 1`, not `&& echo`. Under `set -e` the left side of an `&&` is
       # exempt from the abort, and a `for` loop exits with the status of its
       # LAST iteration -- so the old form printed the syntax error and passed,
       # and only the final line of the step was ever enforced.
       - name: Parse the shell
         run: |
+          rc=0
           for f in bin/preen install.sh site/sync-assets.sh; do
-            bash -n "$f" || exit 1
-            echo "ok  $f"
+            if bash -n "$f"; then echo "ok  $f"; else rc=1; fi
           done
-          sh -n scripts/verify-site.sh || exit 1
-          echo "ok  scripts/verify-site.sh"
+          if sh -n scripts/verify-site.sh; then
+            echo "ok  scripts/verify-site.sh"
+          else
+            rc=1
+          fi
+          # Every file is checked before the step gives up, so one run names
+          # all of them rather than only the first.
+          exit "$rc"
+      # `|| exit 1` here too. These two are safe as `cmd && echo` only because
+      # each step body is a single command, so the `&&` list is also the last
+      # one and its status becomes the step's -- the same accident that made
+      # the loop above look fine. A second line in either would quietly bring
+      # the bug back.
       - name: Help output runs
-        run: bin/preen --help > /dev/null && echo "ok  preen --help"
+        run: |
+          bin/preen --help > /dev/null || exit 1
+          echo "ok  preen --help"
       - name: Installer dry run changes nothing
-        run: ./install.sh --dry-run > /dev/null && echo "ok  install.sh --dry-run"
+        run: |
+          ./install.sh --dry-run > /dev/null || exit 1
+          echo "ok  install.sh --dry-run"
       # The behaviour suite. Parsing the shell says nothing about what the tool
       # does; this drives preen against throwaway repositories and checks the
       # file lists, the previews, the stdin sniff, and that the review modes

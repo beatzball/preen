@@ -14,6 +14,13 @@ Both run in CI, along with a site build and a real Docker image probe. Green
 locally is not the same as green in CI — the runner has no glow and no
 terminal, which is exactly where the interesting failures live.
 
+Nor is green on your machine the same as green on the other one. The suite runs
+twice, on `ubuntu-latest` and on `macos-latest`, because macOS gives preen
+**bash 3.2.57** and the BSD `sort`, `tr`, `find` and `awk`, while Linux gives it
+bash 5 and the GNU ones. `mapfile`, `declare -A`, `${var^^}`, `grep -P` and
+`find -printf` all work on one and fail on the other, and preen is written to
+the older, stricter side of both.
+
 If you changed the site, build it too:
 
 ```sh
