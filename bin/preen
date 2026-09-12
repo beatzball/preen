@@ -136,6 +136,39 @@ wt_records() {
   git worktree list --porcelain 2>/dev/null | tr '\n' '\0'
 }
 
+# What "stumbles" means, and what preen does about it.
+#
+# The plain --porcelain form prints each path on its own line, so a directory
+# name containing a newline is indistinguishable from two records: the path
+# reaches wt_list cut short at the newline. That is not a dropped entry, it is a
+# PLAUSIBLE WRONG ONE -- the line reads as an ordinary worktree, says
+# "0 files" and "detached", and previews and opens nothing, because the
+# directory it names was never there.
+#
+# A newline in a worktree's own path is simply out of reach on a git that has
+# no `worktree list -z`. There is no way back: the fallback has already lost
+# which lines belong to the path, and guessing would trade a wrong entry for a
+# differently wrong one. So preen drops the entry and says so, rather than
+# listing something the rest of the mode cannot honor.
+#
+# The saying-so is the point, and it has to go where it can still be read. fzf
+# takes the whole screen, so anything written to stderr before it starts is
+# wiped; the picker's own header is the one place that survives. wt_list writes
+# the truncated paths here and wt_loop puts this line above the list.
+wt_unlistable_note() {
+  local n word
+  # Tested before it is read, not with `2>/dev/null` on the redirection: bash
+  # reports a failed `<` itself, before the command's own stderr is redirected
+  # anywhere, so every ordinary run -- the file is absent for all of them --
+  # would have scribbled "No such file or directory" onto the terminal.
+  [ -s "$PREEN_STATE/unlistable" ] || return 1
+  n="$(wc -l < "$PREEN_STATE/unlistable" | tr -d ' ')"
+  [ "$n" -gt 0 ] 2>/dev/null || return 1
+  [ "$n" = 1 ] && word=worktree || word=worktrees
+  printf '%s %s hidden: a newline in the directory name needs git 2.36, and this git has no "worktree list -z"' \
+    "$n" "$word"
+}
+
 # one record per worktree: a padded label for the eye, then $WT_SEP and the
 # absolute path for the callbacks. git always prints the main checkout first,
 # and that is not what this mode is about, so the first record becomes the root
@@ -157,7 +190,14 @@ wt_list() {
   local root="" rec path base n word f
   while IFS= read -r -d '' rec; do
     case "$rec" in "worktree "*) path="${rec#worktree }" ;; *) continue ;; esac
+    # The root is only ever used to trim the label, so a truncated one costs a
+    # long label and nothing else. Skipping it here would promote the next
+    # record to root and drop a real worktree from the list, which is worse.
     [ -n "$root" ] || { root="$path"; continue; }
+    # A path git has just printed is a directory that exists. One that is not is
+    # the pre-2.36 truncation above, and listing it would be the lie this mode
+    # cannot afford. Set it aside; wt_loop names the count in the header.
+    [ -d "$path" ] || { printf '%s\n' "$path" >> "$PREEN_STATE/unlistable"; continue; }
     base="$(wt_base "$path" 2>/dev/null)"
     n=0
     while IFS= read -r -d '' f; do
@@ -528,7 +568,7 @@ run_picker() {
 # the same enter binding as diff mode. esc at level two falls out of the inner
 # picker and the loop paints level one again.
 wt_loop() {
-  local sel dir base branch
+  local sel dir base branch note
   while :; do
     echo wt > "$PREEN_STATE/kind"
     : > "$PREEN_STATE/dir"; : > "$PREEN_STATE/rev"
@@ -536,6 +576,9 @@ wt_loop() {
     LABEL=" preen · worktrees "
     PROMPT='  worktree ❯ '
     HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · esc quit'
+    # A list that is short because preen dropped something has to say so on the
+    # list, not on a stderr fzf has already painted over.
+    note="$(wt_unlistable_note)" && HEADER="$HEADER"$'\n'"$note"
     sel="$(run_picker)"
     [ -n "$sel" ] || return 0
     [ -f "$PREEN_STATE/quit" ] && return 0
@@ -577,8 +620,12 @@ if [ "$KIND" = wt ]; then
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
   collect_files < <(wt_list)
   WTS=(${FILES[@]+"${FILES[@]}"})
-  [ ${#WTS[@]} -gt 0 ] \
-    || die "no worktrees besides the main checkout (see: git worktree list)"
+  if [ ${#WTS[@]} -eq 0 ]; then
+    # "no worktrees besides the main checkout" would be a lie when preen just
+    # dropped the only one it was given. Say which it is.
+    if WT_NOTE="$(wt_unlistable_note)"; then die "$WT_NOTE"; fi
+    die "no worktrees besides the main checkout (see: git worktree list)"
+  fi
   wt_loop
   exit 0
 elif [ "$KIND" = md ]; then
