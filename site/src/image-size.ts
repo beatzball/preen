@@ -29,13 +29,21 @@ export interface ImageSize {
 }
 
 /**
- * Returns null for anything unrecognised or unreadable; the caller then omits
- * the attributes rather than guessing at them.
+ * Returns null for anything unrecognised or unreadable. A wrong number is
+ * worse than none, so there is no guessing here — but null is now a build
+ * failure at the call site rather than a silently unsized image. See
+ * annotateImages in pages/docs/[slug].ts.
  */
 export function imageSize(src: string): ImageSize | null {
+  // A cache-busting `?v=2` and a `#fragment` both name the same bytes on
+  // disk. Left on, readFileSync misses and the file reads as unmeasurable —
+  // which, now that unmeasurable stops the build, would reject an image that
+  // is perfectly fine.
+  const rel = src.replace(/[?#].*$/, '').replace(/^\//, '');
+
   let buf: Buffer;
   try {
-    buf = readFileSync(resolve(PUBLIC_DIR, src.replace(/^\//, '')));
+    buf = readFileSync(resolve(PUBLIC_DIR, rel));
   } catch {
     return null;
   }
