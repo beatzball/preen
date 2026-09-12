@@ -1,6 +1,22 @@
 name: ci
 on: [push, pull_request]
 
+# Stated rather than inherited. With no block here every job gets whatever the
+# repository default happens to be -- read-write in a repo created before the
+# default changed, and changeable from a setting nothing in this file can see.
+# On a push to main that token is live in the same run as the job holding
+# COOLIFY_API_TOKEN, so it is worth saying out loud what it may do.
+#
+# `contents: read` is the whole of it, and no job overrides it, because none
+# of them writes anything back to GitHub: the four that check out only read,
+# `deploy` reaches Coolify over a webhook with its own separate secret, and
+# `verify-prod` only makes HTTP requests to the live site.
+#
+# The upload-artifact step in `site` is the one that looks like an exception
+# and is not -- see the note on it below.
+permissions:
+  contents: read
+
 jobs:
   # preen is a bash script, so the cheapest useful check is that it parses.
   # `bash -n` catches an unclosed quote or a broken heredoc, which is most of
@@ -27,7 +43,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       # Pin the interpreter before any step reads it. `bin/preen`, the
       # installer and every test file are `#!/usr/bin/env bash`, so the version
       # they run under is whichever bash PATH resolves -- and if this image
@@ -87,6 +103,20 @@ jobs:
         run: |
           ./install.sh --dry-run > /dev/null || exit 1
           echo "ok  install.sh --dry-run"
+      # The third of the three, and until now the odd one out: site/sync-assets.sh
+      # had the `bash -n` above and nothing else. No job ran it and the site
+      # build does not call it either, so a tape renamed in demo/ or a typo in
+      # an output path shipped green. --dry-run resolves every source and
+      # every destination and writes nothing, so it needs no webp installed
+      # and costs this job no encode time.
+      #
+      # Not sent to /dev/null, unlike the two above: the paths it prints are
+      # the evidence that the script ran, and they are what a reviewer reads
+      # when a rename is what broke.
+      - name: Asset sync resolves every path
+        run: |
+          site/sync-assets.sh --dry-run || exit 1
+          echo "ok  site/sync-assets.sh --dry-run"
       # The behaviour suite. Parsing the shell says nothing about what the tool
       # does; this drives preen against throwaway repositories and checks the
       # file lists, the previews, the stdin sniff, and that the review modes
@@ -100,6 +130,20 @@ jobs:
         # costs minutes for nothing. git-delta is the formula; the binary it
         # installs is `delta`, which is the name the tests look for.
         run: brew install git-delta fzf
+      # The two steps above are the whole matrix, and neither of them is an
+      # `else`. Add windows-latest and `runner.os` is Windows: both are
+      # skipped, nothing installs, and `Test suite` dies somewhere inside the
+      # suite on a missing fzf. This names the OS that has no dependency step
+      # instead, which is the thing the reader actually has to fix.
+      #
+      # Unreachable while the matrix is the two it is -- that is the point. It
+      # costs one skipped step per run and turns a confusing failure into an
+      # obvious one the day somebody adds a third.
+      - name: Unsupported runner OS
+        if: runner.os != 'Linux' && runner.os != 'macOS'
+        run: |
+          echo "::error::${{ runner.os }} has no dependency step in this job. Add one above, or drop the OS from the matrix."
+          exit 1
       - name: Test suite
         run: |
           echo "running the suite under: $(command -v bash) $(bash --version | head -n 1)"
@@ -115,15 +159,15 @@ jobs:
       run:
         working-directory: site
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4.3.0
         with:
           # `defaults.run.working-directory` above applies to `run:` steps
           # only, not to an action's inputs — without this the action looks for
           # packageManager in a package.json at the repo root, which does not
           # exist, and fails with "No pnpm version is specified".
           package_json_file: site/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           # Matches site/Dockerfile, so CI and the deployed image agree.
           node-version: '22'
@@ -167,8 +211,15 @@ jobs:
         # explain why are thrown away with the runner. Each target reports into
         # its own subdirectory, so the passing run does not overwrite the
         # failing one.
+        #
+        # No `actions: write` for this, and none needed: upload-artifact v4
+        # talks to the artifact service with ACTIONS_RUNTIME_TOKEN, which the
+        # runner mints per job and which the `permissions:` block at the top
+        # does not govern. The same is true of `cache: pnpm` above and of the
+        # type=gha build cache in smoke-image. Checked by running this step on
+        # a real run under `contents: read` rather than reasoned about.
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: playwright-report
           path: site/playwright-report/
@@ -195,10 +246,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [site]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: ./site
           load: true
@@ -240,7 +291,7 @@ jobs:
     outputs:
       changed: ${{ steps.gate.outputs.changed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with: { fetch-depth: 0 }
       - name: Did this push touch the site?
         id: gate
@@ -302,7 +353,7 @@ jobs:
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Probe production
         env:
           PREEN_EXPECT_COMMIT: ${{ github.sha }}
