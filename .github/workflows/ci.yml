@@ -87,6 +87,20 @@ jobs:
         run: |
           ./install.sh --dry-run > /dev/null || exit 1
           echo "ok  install.sh --dry-run"
+      # The third of the three, and until now the odd one out: site/sync-assets.sh
+      # had the `bash -n` above and nothing else. No job ran it and the site
+      # build does not call it either, so a tape renamed in demo/ or a typo in
+      # an output path shipped green. --dry-run resolves every source and
+      # every destination and writes nothing, so it needs no webp installed
+      # and costs this job no encode time.
+      #
+      # Not sent to /dev/null, unlike the two above: the paths it prints are
+      # the evidence that the script ran, and they are what a reviewer reads
+      # when a rename is what broke.
+      - name: Asset sync resolves every path
+        run: |
+          site/sync-assets.sh --dry-run || exit 1
+          echo "ok  site/sync-assets.sh --dry-run"
       # The behaviour suite. Parsing the shell says nothing about what the tool
       # does; this drives preen against throwaway repositories and checks the
       # file lists, the previews, the stdin sniff, and that the review modes
@@ -100,6 +114,20 @@ jobs:
         # costs minutes for nothing. git-delta is the formula; the binary it
         # installs is `delta`, which is the name the tests look for.
         run: brew install git-delta fzf
+      # The two steps above are the whole matrix, and neither of them is an
+      # `else`. Add windows-latest and `runner.os` is Windows: both are
+      # skipped, nothing installs, and `Test suite` dies somewhere inside the
+      # suite on a missing fzf. This names the OS that has no dependency step
+      # instead, which is the thing the reader actually has to fix.
+      #
+      # Unreachable while the matrix is the two it is -- that is the point. It
+      # costs one skipped step per run and turns a confusing failure into an
+      # obvious one the day somebody adds a third.
+      - name: Unsupported runner OS
+        if: runner.os != 'Linux' && runner.os != 'macOS'
+        run: |
+          echo "::error::${{ runner.os }} has no dependency step in this job. Add one above, or drop the OS from the matrix."
+          exit 1
       - name: Test suite
         run: |
           echo "running the suite under: $(command -v bash) $(bash --version | head -n 1)"
