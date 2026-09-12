@@ -66,10 +66,36 @@ function computePrevNext(
  * the heaviest thing the site serves and a page often has one near the top
  * and others most readers never scroll to. The first stays eager: it is
  * usually above the fold and is the thing the reader is waiting for.
+ *
+ * **An image that cannot be sized stops the build.** sizeOf reads PNG and
+ * WebP headers and returns null for everything else, which is the right
+ * fallback — a wrong number is worse than none — but on its own it is silent:
+ * add a .jpg and that page quietly reserves nothing again, the build passes,
+ * the probe passes, and nothing measures CLS. Nobody noticing is the failure
+ * mode, so the omission is raised here instead of shipped. The opt-out is to
+ * write the width and height yourself; see the message below.
+ *
+ * Reported and `process.exitCode`, deliberately NOT `throw`. litro's page
+ * handler wraps every pageData fetcher in a try/catch that calls console.warn
+ * and renders the page without data — "Data fetch failure is non-fatal" — so a
+ * throw here is caught, `pnpm build` still exits 0, AND the page ships with
+ * the Loading placeholder instead of its content. Measured both ways on the
+ * fixture: throw gave exit 0 and a blank /docs/pipes; this gives exit 1 and a
+ * complete page. Turning this back into a throw would silently restore the
+ * bug it was written to close.
+ *
+ * Every image is checked before anything is reported, so one build names every
+ * problem rather than one per round trip.
  */
-function annotateImages(html: string, sizeOf: (src: string) => { w: number; h: number } | null): string {
+function annotateImages(
+  html: string,
+  where: string,
+  sizeOf: (src: string) => { w: number; h: number } | null,
+): string {
   let seen = 0;
-  return html.replace(/<img\b([^>]*)>/g, (tag, attrs: string) => {
+  const unsized: string[] = [];
+
+  const out = html.replace(/<img\b([^>]*)>/g, (tag, attrs: string) => {
     // Count every image, including ones skipped below. Counting only the ones
     // that get rewritten would make a hand-written eager <img> promote the
     // NEXT image to "first" as well, and neither would be deferred.
@@ -81,17 +107,39 @@ function annotateImages(html: string, sizeOf: (src: string) => { w: number; h: n
       add.push('loading="lazy"', 'decoding="async"');
     }
 
-    if (!/[\s"']width\s*=/.test(' ' + attrs) && !/[\s"']height\s*=/.test(' ' + attrs)) {
+    // Either attribute written by hand means the author has taken the size on
+    // themselves. That is the opt-out, and it is also why this tests for
+    // EITHER rather than both: with one already present, adding the measured
+    // pair emitted the same attribute twice.
+    const authored = /[\s"']width\s*=/.test(' ' + attrs) || /[\s"']height\s*=/.test(' ' + attrs);
+    if (!authored) {
       const src = /\ssrc\s*=\s*["']([^"']+)["']/.exec(attrs)?.[1];
-      // Site-root paths only: anything remote cannot be measured at build time.
-      if (src?.startsWith('/') && !src.startsWith('//')) {
-        const size = sizeOf(src);
-        if (size) add.push(`width="${size.w}"`, `height="${size.h}"`);
-      }
+      // Site-root paths only: anything remote has no file to read at build
+      // time. It is collected rather than skipped, because an unsized remote
+      // image shifts the layout exactly as much as an unsized local one.
+      const local = src?.startsWith('/') && !src.startsWith('//');
+      const size = local ? sizeOf(src!) : null;
+      if (size) add.push(`width="${size.w}"`, `height="${size.h}"`);
+      else unsized.push(src ?? '(no src)');
     }
 
     return add.length ? `<img${attrs} ${add.join(' ')}>` : tag;
   });
+
+  if (unsized.length) {
+    console.error(
+      `${where}: ${unsized.length} image(s) have no intrinsic size, so the page would ` +
+        `reserve no space for them and the layout would shift as they load:\n` +
+        unsized.map((s) => `  ${s}`).join('\n') +
+        `\nsrc/image-size.ts reads PNG and WebP headers only, and nothing remote can be ` +
+        `measured at build time. Either convert the image to WebP, or write the tag in ` +
+        `the Markdown with the size you want reserved, e.g.\n` +
+        `  <img src="..." alt="..." width="1400" height="620">`,
+    );
+    process.exitCode = 1;
+  }
+
+  return out;
 }
 
 export const pageData = definePageData(async (event) => {
@@ -130,7 +178,11 @@ export const pageData = definePageData(async (event) => {
   // warning rather than an error — the build passes and the doc page renders
   // blank in the browser. Same dynamic-import treatment as highlighting.
   const { imageSize } = await import('../../src/image-size.js');
-  const body = annotateImages(applyHighlighting(addHeadingIds(doc.body)), imageSize);
+  const body = annotateImages(
+    applyHighlighting(addHeadingIds(doc.body)),
+    `content/docs/${slug}.md`,
+    imageSize,
+  );
   const { prevDoc, nextDoc } = computePrevNext(siteConfig.sidebar, slug);
   const title = doc.title || slug;
   const description = doc.description || siteConfig.description;
