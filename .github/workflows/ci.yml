@@ -218,7 +218,7 @@ jobs:
         # does not govern. The same is true of `cache: pnpm` above and of the
         # type=gha build cache in smoke-image. Checked by running this step on
         # a real run under `contents: read` rather than reasoned about.
-        if: failure()
+        if: always()   # TEMPORARY: prove the upload works under contents:read
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: playwright-report
