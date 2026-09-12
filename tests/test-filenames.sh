@@ -15,13 +15,13 @@ set -u
 . "$(dirname "$0")/lib.sh"
 
 d="$(new_repo)"; s=""; wtroot=""; wtroot2=""; mdd=""; shim=""
-prd=""; spr=""; edbin=""; edlog=""; raw2=""; raw2t=""
+prd=""; spr=""; edbin=""; edlog=""; raw2=""; raw2t=""; rend=""; sren=""
 raw="$(mktemp "${TMPDIR:-/tmp}/preen-raw.XXXXXX")"
 # Every temp path this file makes, named rather than globbed: `"$raw".*` with
 # an empty $raw is `.*`, which reaches the dotfiles of whatever directory the
 # suite was started from.
 cleanup() {
-  rm -rf "$d" "$s" "$wtroot" "$wtroot2" "$mdd" "$shim" "$prd" "$spr" "$edbin" \
+  rm -rf "$d" "$s" "$wtroot" "$wtroot2" "$mdd" "$shim" "$prd" "$spr" "$edbin" "$rend" "$sren" \
          "${_preen_dep_shim:-}"
   rm -f "$edlog" ${raw:+"$raw" "$raw.argv"} \
         ${raw2:+"$raw2" "$raw2.argv" "$raw2.n" "$raw2.level1"} \
@@ -268,6 +268,47 @@ for n in "${md_names[@]}"; do
   assert_true $? "md mode lists as one entry: $(q "$n")"
 done
 
+# ---- md mode on a directory whose name starts with a dash -------------------
+# `find -weird ...` reads the name as a bundle of options — `find: illegal
+# option -- w` — and md mode then said "nothing to show (md mode)". The status
+# and the message were both right, which is what made it read as noise: the
+# files are there and none of them was listed.
+mkdir -p "$mdd/-weird"
+printf '# one\n' > "$mdd/-weird/a.md"
+printf '# two\n' > "$mdd/-weird/b.md"
+
+preen_list_raw "$raw" "$mdd" md -weird
+assert_eq "$(list_count "$raw")" "2" "md mode finds the files under a dash-leading directory"
+
+# The `./` stays on these names. It is what keeps the renderer and $EDITOR from
+# reading `-weird/a.md` as options in their turn, so trimming it here would
+# trade find's complaint for a blank preview.
+for n in './-weird/a.md' './-weird/b.md'; do
+  list_has "$raw" "$n"
+  assert_true $? "md mode keeps the ./ that makes the name openable: $(q "$n")"
+done
+
+# And the names are not just well-shaped, they resolve. The `seen` count is the
+# guard: with nothing listed, the loop would pass by never running.
+missing=""; seen=0
+while IFS= read -r -d '' entry || [ -n "$entry" ]; do
+  seen=$((seen + 1))
+  [ -f "$mdd/$entry" ] || missing="$missing $(q "$entry")"
+  entry=""
+done < "$raw"
+assert_eq "$missing" "" "every name md mode listed under -weird is a file that is really there"
+assert_eq "$seen" "2" "that loop saw both of them"
+
+# The complaint itself, which is the part a person sees.
+nofzfmd="$(mktemp -d "${TMPDIR:-/tmp}/preen-nofzfmd.XXXXXX")"
+printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$nofzfmd/fzf"
+chmod +x "$nofzfmd/fzf"
+# Empty, not "no 'illegal option'": that wording is BSD find's, GNU find says
+# "unknown predicate", and the run has nothing to say on stderr either way.
+mderr="$(cd "$mdd" && PATH="$nofzfmd:$PATH" "$PREEN" md -weird 2>&1 >/dev/null </dev/null || true)"
+assert_eq "$mderr" "" "md mode on a dash-leading directory is silent: no complaint, no 'nothing to show'"
+rm -rf "$nofzfmd"
+
 # ---- pr mode ----------------------------------------------------------------
 # Two separate things to hold shut here.
 #
@@ -294,7 +335,15 @@ pr_names=( 'plain.txt' 'with space.txt' 'has"quote.txt' 'back\slash.txt'
            # These two differ only by a wrapping pair of double quotes. A
            # name that is spelled like a quoted name, but is just a name,
            # must not match the block belonging to its own interior.
-           '"quoted"' 'quoted' )
+           '"quoted"' 'quoted'
+           # And these two are the pair from #22. A space does not make git
+           # quote a header, so `x.md` arrives as `diff --git a/x.md b/x.md`
+           # and ` b/x.md` as `diff --git a/ b/x.md b/ b/x.md` -- whose last
+           # seven bytes ARE ` b/x.md`. The tail match took that for x.md's own
+           # block and the preview showed the two files stitched together.
+           # They go last, so the two markers below can be worked out.
+           'x.md' ' b/x.md' )
+mkdir -p "$prd/ b"
 i=0
 for n in "${pr_names[@]}"; do printf 'PR-%s-before\n' "$i" > "$prd/$n"; i=$((i + 1)); done
 tgit -C "$prd" add -A; tgit -C "$prd" commit -qm pr
@@ -373,6 +422,50 @@ for n in "${pr_names[@]}"; do
   list_has "$raw" "$n"
   assert_true $? "pr mode holds gh's name as one entry, unsplit: $(q "$n")"
 done
+
+# ---- the ` b/x.md` over-match, named --------------------------------------
+# The set check above catches this too, but only as one name out of ten. Say
+# what it is: each of the pair previews its own block and not the other's.
+# The markers are positional, and these two were appended last.
+mk_x="PR-$(( ${#pr_names[@]} - 2 ))-after"
+mk_b="PR-$(( ${#pr_names[@]} - 1 ))-after"
+
+out="$(preview "$spr" 'x.md')"
+assert_contains     "$out" "$mk_x" "pr: x.md previews its own file"
+assert_not_contains "$out" "$mk_b" "pr: and not the block of the file named ' b/x.md' as well"
+
+out="$(preview "$spr" ' b/x.md')"
+assert_contains     "$out" "$mk_b" "pr: a file named ' b/x.md' previews its own file"
+assert_not_contains "$out" "$mk_x" "pr: and not x.md's block as well"
+
+# ---- pr mode: a rename, which is the case the arithmetic must decline -------
+# An unquoted header is `a/P b/P` for everything but a rename, and solving for
+# P is what settles the over-match above. A rename's two paths differ, so the
+# solved P is not a path at all — with names of unequal length it comes out as
+# a tail of the real one — and the renamed file would preview blank. The fix
+# has to hand that case back to the tail match, and these names are of unequal
+# length on purpose: `a/a.md b/bbbbb.md` solves to `bbb.md`, which is nobody.
+rend="$(mktemp -d "${TMPDIR:-/tmp}/preen-prren.XXXXXX")"
+git init -q -b main "$rend"
+# Long enough that git's similarity detection actually calls it a rename. With
+# a one-line file it reports a delete and an add instead, and both of those
+# carry an `a/P b/P` header — so the fixture would have named the case and
+# never reached it.
+{ echo 'RENAMED-BODY'; for i in 1 2 3 4 5 6 7 8 9 10; do echo "line $i"; done; } > "$rend/a.md"
+printf 'UNTOUCHED-BODY\n' > "$rend/keep.md"
+tgit -C "$rend" add -A; tgit -C "$rend" commit -qm init
+tgit -C "$rend" mv a.md bbbbb.md
+printf 'RENAMED-AFTER\n' >> "$rend/bbbbb.md"
+tgit -C "$rend" add -A
+
+sren="$(preen_state pr sbs "" "")"
+git -C "$rend" diff -M --cached HEAD > "$sren/pr.diff"
+assert_contains "$(grep '^diff --git' "$sren/pr.diff")" 'a/a.md b/bbbbb.md' \
+  "the fixture really is a rename, with two different paths in one header"
+
+out="$(preview "$sren" 'bbbbb.md')"
+assert_contains     "$out" "RENAMED-AFTER"  "pr: a renamed file previews its own block"
+assert_not_contains "$out" "UNTOUCHED-BODY" "pr: and not the next file's along with it"
 
 
 # ---- ordinary names are untouched by any of this ----------------------------
