@@ -49,13 +49,13 @@ green for the wrong reason.
 | file | covers |
 |---|---|
 | `test-diff-list.sh` | the list from the root and from a subdirectory, a revision argument, a repo with no commit, staged and unstaged together |
-| `test-worktrees.sh` | the count agrees with the level-one preview, merge-base rather than the branch tip, the main checkout is excluded, read-only |
+| `test-worktrees.sh` | the count agrees with the level-one preview, merge-base rather than the branch tip, the main checkout is excluded, read-only, and the pre-2.36 fallback — including the worktree it has to drop and say so about |
 | `test-stdin.sh` | the diff/markdown sniff, including `---` alone staying markdown and a `--color=always` diff still reading as a diff |
-| `test-filenames.sh` | accented names, spaces, a leading dash, and the quote, backslash, tab and newline cases from #3 — in diff, md, pr and both levels of worktrees, plus the `--read0` fzf is given and the `ctrl-e` binding a worktree path is spent through |
+| `test-filenames.sh` | accented names, spaces, a leading dash, and the quote, backslash, tab and newline cases from #3 — in diff, md, pr and both levels of worktrees, plus a tab in a worktree's own directory name, a dash-leading directory in md mode, a PR file named ` b/x.md`, the `--read0` fzf is given and the `ctrl-e` binding a worktree path is spent through |
 | `test-pr.sh` | four `gh` calls whatever the file count, previews slice the cache, read-only |
 | `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
 
-## Seven bugs these exist to hold shut
+## Eleven bugs these exist to hold shut
 
 Each was found by review, fixed, and is now covered. Reverting any one of the
 fixes turns this suite red:
@@ -80,6 +80,22 @@ fixes turns this suite red:
 - **`preen FILE.md` was not paged**, so it exited the moment the last line was
   written. A tmux pane opened only to read the file closed with it, which read
   as glow never having run.
+- **A tab in a worktree's directory name split its record in the wrong place.**
+  The record was `label <tab> path` and the label already ended with that path,
+  so the callbacks were handed the tail of the label. The pane counted the files
+  and then said the branch had changed nothing. The two fields are joined on US
+  (0x1f) now, which a path cannot hold.
+- **On git older than 2.36 a newline in a worktree's directory name listed a
+  worktree that was not there.** The fallback prints each path on its own line,
+  so the path arrived cut short — not a missing entry but a plausible wrong one.
+  That entry is dropped now, and the picker's header says one went.
+- **`preen md` on a dash-leading directory found nothing.** `find -weird` read
+  the name as options. The root gets a `./`, and the names keep it, because
+  glow and `$EDITOR` would read the name as options in turn.
+- **`pr` mode previewed two files stitched together** for a file named
+  ` b/x.md`, whose header's last seven bytes are ` b/x.md` and so matched the
+  tail slice for `x.md`. An unquoted `a/P b/P` is solved rather than tail-
+  matched now; a rename, whose paths differ, still falls back to the tail.
 
 ## Writing a new one
 
