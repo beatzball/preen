@@ -1,0 +1,25 @@
+# A commit SHA does not move. That is the point of pinning ci.yml to them, and
+# it is also the cost: with nothing watching, this repo runs whatever checkout
+# was current the day it was pinned, forever, including its CVEs. Dependabot
+# rewrites the SHA and the trailing `# v4.4.0` comment together, so the pin
+# stays readable as well as current.
+#
+# `directory: /` is the whole of what github-actions means: Dependabot reads
+# .github/workflows/ regardless of the path given here.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      # Monthly, not weekly. Six first-party GitHub and Docker actions on a
+      # repo this size do not release often enough to be worth a weekly round,
+      # and a stale pin is a slow problem rather than an urgent one.
+      interval: monthly
+    groups:
+      # One pull request for the lot, not six. Every bump is the same
+      # mechanical line change, and each separate one otherwise spends a full
+      # CI run -- two shell legs, a Playwright suite and a Docker build -- to
+      # merge a forty-character edit.
+      actions:
+        patterns:
+          - "*"
