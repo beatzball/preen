@@ -19,6 +19,20 @@ FROM nginx:alpine
 COPY --from=builder /app/dist/static /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Drop nitro's build manifest. `nitro build` writes dist/static/nitro.json --
+# a timestamp, the nitro version and a `preview` command -- and the COPY above
+# takes it with everything else. Nothing on the site fetches it, so serving it
+# only adds a public URL that changes on every deploy.
+#
+# Deleted here rather than given a cache rule in nginx.conf: a file nobody
+# requests does not need a correct cache policy, it needs to not be there. The
+# /version.json rule below exists because that file IS fetched, by the deploy
+# gate; this one has no such reader.
+#
+# nginx then answers /nitro.json with a 404, and the `location /` block
+# deliberately omits `always`, so that 404 carries no Cache-Control at all.
+RUN rm -f /usr/share/nginx/html/nitro.json
+
 # Which commit is actually being served.
 #
 # A static site has no /api/health to ask, so bake the answer in. Without it a
