@@ -136,14 +136,23 @@ wt_records() {
   git worktree list --porcelain 2>/dev/null | tr '\n' '\0'
 }
 
-# one record per worktree: a padded label for the eye, then a tab and the
+# one record per worktree: a padded label for the eye, then $WT_SEP and the
 # absolute path for the callbacks. git always prints the main checkout first,
 # and that is not what this mode is about, so the first record becomes the root
 # and is dropped from the list. The count leads because the list pane is narrow
 # and a long path is the one column that can afford to run off the end.
 #
+# The label ENDS with the worktree's path relative to the root, so the byte that
+# joins the two fields must be one that path cannot contain. A tab can: a tab in
+# a directory name used to put a second tab in the record, and fzf's `{2}` then
+# handed the callbacks the tail of the label rather than the path -- a count of
+# 2 files beside a blank preview and a level two that said nothing had changed.
+# NUL is taken (it separates the records), so this is US, 0x1f, which fzf
+# accepts as a --delimiter and which no sane path holds.
+#
 # Everything here is NUL-terminated, so the count counts records: `wc -l` on a
 # -z stream answers 0.
+WT_SEP=$'\037'
 wt_list() {
   local root="" rec path base n word f
   while IFS= read -r -d '' rec; do
@@ -155,8 +164,8 @@ wt_list() {
       [ -n "$f" ] && n=$((n + 1))
     done < <(wt_files "$path" "$base")
     [ "$n" = 1 ] && word=file || word=files
-    printf '%4s %-5s  %-24s  %s\t%s\0' \
-      "$n" "$word" "$(wt_branch "$path")" "${path#"$root"/}" "$path"
+    printf '%4s %-5s  %-24s  %s%s%s\0' \
+      "$n" "$word" "$(wt_branch "$path")" "${path#"$root"/}" "$WT_SEP" "$path"
   done < <(wt_records)
 }
 
@@ -490,7 +499,7 @@ run_picker() {
     --layout=reverse \
     --border=rounded \
     --border-label="$LABEL" \
-    --delimiter=$'\t' --with-nth="$WITH_NTH" \
+    --delimiter="$WT_SEP" --with-nth="$WITH_NTH" \
     --preview "$SELF --preview $PICK" \
     --preview-window 'right,65%,border-left' \
     --header "$HEADER" \
@@ -531,7 +540,7 @@ wt_loop() {
     [ -n "$sel" ] || return 0
     [ -f "$PREEN_STATE/quit" ] && return 0
 
-    dir="${sel#*$'\t'}"
+    dir="${sel#*"$WT_SEP"}"
     base="$(wt_base "$dir" 2>/dev/null)"
     branch="$(wt_branch "$dir")"
     collect_files < <(wt_files "$dir" "$base")

@@ -14,17 +14,18 @@
 set -u
 . "$(dirname "$0")/lib.sh"
 
-d="$(new_repo)"; s=""; wtroot=""; mdd=""; shim=""
-prd=""; spr=""; edbin=""; edlog=""; raw2=""
+d="$(new_repo)"; s=""; wtroot=""; wtroot2=""; mdd=""; shim=""
+prd=""; spr=""; edbin=""; edlog=""; raw2=""; raw2t=""
 raw="$(mktemp "${TMPDIR:-/tmp}/preen-raw.XXXXXX")"
 # Every temp path this file makes, named rather than globbed: `"$raw".*` with
 # an empty $raw is `.*`, which reaches the dotfiles of whatever directory the
 # suite was started from.
 cleanup() {
-  rm -rf "$d" "$s" "$wtroot" "$mdd" "$shim" "$prd" "$spr" "$edbin" \
+  rm -rf "$d" "$s" "$wtroot" "$wtroot2" "$mdd" "$shim" "$prd" "$spr" "$edbin" \
          "${_preen_dep_shim:-}"
   rm -f "$edlog" ${raw:+"$raw" "$raw.argv"} \
-        ${raw2:+"$raw2" "$raw2.argv" "$raw2.n" "$raw2.level1"}
+        ${raw2:+"$raw2" "$raw2.argv" "$raw2.n" "$raw2.level1"} \
+        ${raw2t:+"$raw2t" "$raw2t.argv" "$raw2t.n" "$raw2t.level1"}
 }
 trap cleanup EXIT
 s="$(preen_state diff sbs "" "")"
@@ -201,6 +202,56 @@ assert_eq "$count" "4" "the worktree counts all four odd names, tracked and untr
 assert_eq "$shown" "$count" "count and level-one preview agree"
 rm -rf "$swt"
 git -C "$d" worktree remove --force "$wt" 2>/dev/null
+
+# ---- a tab in the worktree's OWN directory name -----------------------------
+# Every list above is about a file inside a worktree. This one is about the
+# worktree record itself, which is two fields — a label for the eye, then the
+# absolute path the callbacks are handed — and the label ENDS with that same
+# path. So a tab in the directory name put a SECOND tab in a tab-joined record,
+# and fzf's `{2}` handed the callbacks the tail of the label instead of a path.
+#
+# Nothing crashed. The pane said "2 files" and level two said the branch had
+# changed nothing, which is the whole reason this needs an assertion: the count
+# and the pane contradicted each other and neither looked like an error.
+wtroot2="$(mktemp -d "${TMPDIR:-/tmp}/preen-wtroot2.XXXXXX")"
+# Resolved, because this is the one worktree test that compares preen's idea of
+# the path with the fixture's. git prints the real path, and on macOS $TMPDIR is
+# /var/folders/... — a symlink into /private/var, so the two spellings differ.
+tabwt="$(cd "$wtroot2" && pwd -P)/has"$'\t'"tab"
+git -C "$d" worktree add -q -b tabbed "$tabwt" 2>/dev/null
+printf 'MARKER-tab-one\n' > "$tabwt/tab-new1.txt"
+printf 'MARKER-tab-two\n' > "$tabwt/tab-new2.txt"
+
+preen_list_raw "$raw" "$d" worktrees
+
+# The separator is read out of the flags preen actually passed, so the split
+# below cannot pass by agreeing with a guess hard-coded in this file.
+US="$(printf '\037')"
+sep="$(list_flags "$raw" | sed -n 's/^--delimiter=//p')"
+assert_eq "$sep" "$US" "the worktree record is joined on US (0x1f), which a path cannot hold"
+
+# The field the callbacks are spent: it has to be the worktree, tab and all.
+rec=""; IFS= read -r -d '' rec < "$raw" || true
+recdir="${rec#*"$US"}"
+assert_eq "$recdir" "$tabwt" "the record's path field is the worktree's own path"
+[ -d "$recdir" ]
+assert_true $? "and that path is a directory that exists"
+
+# The symptom itself, end to end: level two inside that worktree. With the
+# record split in the wrong place `dir` is not a directory, wt_files comes back
+# empty, and preen paints the "changed nothing" placeholder over two real files.
+raw2t="$(mktemp "${TMPDIR:-/tmp}/preen-raw2t.XXXXXX")"
+preen_list_raw2 "$raw2t" "$d" worktrees
+assert_eq "$(list_count "$raw2t")" "2" \
+  "level two inside a tab-named worktree lists both its files"
+for n in 'tab-new1.txt' 'tab-new2.txt'; do
+  list_has "$raw2t" "$n"
+  assert_true $? "tab-named worktree, level two lists: $(q "$n")"
+done
+assert_not_contains "$(tr '\0' '\n' < "$raw2t")" "changed nothing" \
+  "level two is the file list, not the empty-worktree placeholder"
+
+git -C "$d" worktree remove --force "$tabwt" 2>/dev/null
 
 # ---- md mode: the list comes from find, and has the same two problems -------
 mdd="$(mktemp -d "${TMPDIR:-/tmp}/preen-md.XXXXXX")"
