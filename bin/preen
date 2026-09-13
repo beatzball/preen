@@ -150,15 +150,30 @@ wt_records() {
 # mounted; neither is a directory, on any version of git. So `-d` answers "is
 # it there", never "did the fallback cut this short".
 #
-# On the fallback there is a second way to be fooled: a path cut at a newline
-# that STARTS the last component leaves the parent directory, which is real. A
-# worktree always carries a `.git` entry and a bare parent does not, so that is
-# the question to ask there. On the -z path git's answer is exact and `-d` is
-# the whole of it.
+# On the fallback a cut path can also land on something real, and then nothing
+# above notices. Four shapes, all of them things git cannot have printed:
+#
+#   a trailing slash          a newline STARTING the last component leaves the
+#                             parent -- and git never prints a trailing slash
+#   the root                  a worktree at <root><newline>tail cuts to <root>
+#   a path already listed     a worktree nested in another cuts to the outer
+#                             one, and `wts/a<newline>b` cuts to `wts/a` --
+#                             git lists each worktree exactly once
+#
+# The `.git` test alone passes all three, because what the cut landed on IS a
+# worktree. Only the shape gives them away. None of this is checked on the -z
+# path: there the answer is exact, and a real path may look however it likes.
 wt_reachable() {
-  [ -d "$1" ] || return 1
+  local path="$1" root="$2"
+  [ -d "$path" ] || return 1
   [ -f "$PREEN_STATE/no-z" ] || return 0
-  [ -e "$1/.git" ]
+  [ -e "$path/.git" ] || return 1
+  case "$path" in */) return 1 ;; esac
+  [ "$path" = "$root" ] && return 1
+  # The seen list only ever holds paths with no newline in them: on the fallback
+  # a path that has one arrives cut, so it is never recorded whole. That is what
+  # makes a line-oriented check safe here.
+  ! grep -qxF -- "$path" "$PREEN_STATE/wt-seen" 2>/dev/null
 }
 
 # What preen does with a worktree git named but preen cannot open, and what it
@@ -199,7 +214,11 @@ wt_unlistable_note() {
   if [ -f "$PREEN_STATE/no-z" ]; then
     printf '%s — or holds a newline, which this git cannot spell (needs git 2.36)' "$what"
   else
-    printf '%s — run: git worktree prune' "$what"
+    # Conditional, because "not there" still has more than one cause here. A
+    # worktree locked on a disk that is not mounted is also not there, and prune
+    # will not touch it -- by design, that is what the lock is for. Advice that
+    # cannot work is the thing this message exists to stop giving.
+    printf '%s — if it is gone for good: git worktree prune' "$what"
   fi
 }
 
@@ -235,8 +254,9 @@ wt_list() {
     # without a prune, or, on the fallback, one whose path arrived cut short.
     # Listing either is the lie this mode cannot afford. Set it aside;
     # wt_unlistable_note says how many and, as far as it is knowable, why.
-    wt_reachable "$path" \
+    wt_reachable "$path" "$root" \
       || { printf '%s\n' "$path" >> "$PREEN_STATE/unlistable"; continue; }
+    printf '%s\n' "$path" >> "$PREEN_STATE/wt-seen"
     base="$(wt_base "$path" 2>/dev/null)"
     n=0
     while IFS= read -r -d '' f; do

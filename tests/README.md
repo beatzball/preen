@@ -53,6 +53,7 @@ green for the wrong reason.
 
 | file | covers |
 |---|---|
+| `test-harness.sh` | the harness itself: with an unusable `TMPDIR` the suite must delete nothing in the checkout, commit nothing to its branch, and fail loudly |
 | `test-diff-list.sh` | the list from the root and from a subdirectory, a revision argument, a repo with no commit, staged and unstaged together |
 | `test-worktrees.sh` | the count agrees with the level-one preview, merge-base rather than the branch tip, the main checkout is excluded, read-only, the pre-2.36 fallback, and the two kinds of worktree it has to drop — one git cannot spell and one that was deleted without a prune — each with the reason it is allowed to give |
 | `test-stdin.sh` | the diff/markdown sniff, including `---` alone staying markdown and a `--color=always` diff still reading as a diff |
@@ -60,7 +61,7 @@ green for the wrong reason.
 | `test-pr.sh` | four `gh` calls whatever the file count, previews slice the cache, read-only |
 | `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
 
-## Thirteen bugs these exist to hold shut
+## Fourteen bugs these exist to hold shut
 
 Each was found by review, fixed, and is now covered. Reverting any one of the
 fixes turns this suite red:
@@ -101,11 +102,24 @@ fixes turns this suite red:
   git. preen then told them a newline needed git 2.36, on a git that had `-z`
   and a name with no newline in it, and exited 1 if that was the only worktree.
   Only the fallback can cut a path short, so only the fallback names the git
-  version now; everything else is told to prune.
+  version now; everywhere else the advice is to prune — worded as a condition,
+  because a worktree locked on a disk that is not mounted is also "not there"
+  and prune will not touch it.
 - **The fallback listed a worktree's parent as a worktree** when the newline
   started the last path component, because the cut path was then a real
   directory. A worktree carries a `.git` entry and a bare parent does not, and
-  that is what the fallback asks.
+  that is what the fallback asks. A cut path can land on a real *worktree* too —
+  the outer one when they nest, `wts/a` when the other is `wts/a<newline>b`, the
+  main checkout when the worktree sits directly inside it — and `.git` passes
+  every one of those. Each is a shape git cannot print: a trailing slash, the
+  root, or a path already listed.
+- **The suite deleted the checkout's own `tests/` directory**, and on another
+  occasion committed the working tree to the live branch. Both came from a
+  `$TMPDIR` that no longer existed: `mktemp` fails silently, the variable is
+  empty, and `rm -rf "$(cd "" && pwd -P)"` resolves to the suite's own cwd while
+  `git -C ""` acts on the repository it is testing. Nothing in `tests/` calls
+  `mktemp` directly any more — `mktmpd`, `mktmpf` and `resolve_dir` in `lib.sh`
+  fail loudly instead — and `test-harness.sh` holds it shut.
 - **`preen md` on a dash-leading directory found nothing.** `find -weird` read
   the name as options. The root gets a `./`, and the names keep it, because
   glow and `$EDITOR` would read the name as options in turn.
