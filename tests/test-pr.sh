@@ -8,7 +8,7 @@
 set -u
 . "$(dirname "$0")/lib.sh"
 
-d="$(new_repo)"; shim=""; s=""
+d="$(new_repo)" || exit 1; shim=""; s=""
 trap 'rm -rf "$d" "$shim" "$s" "${_preen_dep_shim:-}"' EXIT
 
 # A PR touching several files, so a per-file call would show up as a count.
@@ -34,7 +34,7 @@ index 555..666 100644
 -old three
 +new three'
 
-shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-gh.XXXXXX")"
+mktmpd shim preen-gh
 LOG="$shim/calls"
 : > "$LOG"
 cat > "$shim/gh" <<EOF
@@ -75,7 +75,7 @@ grep -q 'pr diff 42 --name-only' "$LOG"; assert_true $? "the file list is fetche
 
 # ---- each preview slices the cache, not the network -------------------------
 before="$(grep -c . "$LOG")"
-s="$(mktemp -d "${TMPDIR:-/tmp}/preen-state.XXXXXX")"
+mktmpd s preen-state
 printf 'pr'  > "$s/kind"
 printf 'sbs' > "$s/mode"
 printf '%s\n' "$DIFF" > "$s/pr.diff"

@@ -14,21 +14,27 @@
 set -u
 . "$(dirname "$0")/lib.sh"
 
-d="$(new_repo)"; s=""; wtroot=""; wtroot2=""; mdd=""; shim=""
+d="$(new_repo)" || exit 1; s=""; wtroot=""; wtroot2=""; mdd=""; shim=""
 prd=""; spr=""; edbin=""; edlog=""; raw2=""; raw2t=""; rend=""; sren=""
-raw="$(mktemp "${TMPDIR:-/tmp}/preen-raw.XXXXXX")"
+nofzfmd=""
+mktmpf raw preen-raw
 # Every temp path this file makes, named rather than globbed: `"$raw".*` with
 # an empty $raw is `.*`, which reaches the dotfiles of whatever directory the
 # suite was started from.
 cleanup() {
-  rm -rf "$d" "$s" "$wtroot" "$wtroot2" "$mdd" "$shim" "$prd" "$spr" "$edbin" "$rend" "$sren" \
-         "${_preen_dep_shim:-}"
-  rm -f "$edlog" ${raw:+"$raw" "$raw.argv"} \
+  # Guarded with ${x:+...} so an empty one contributes no argument at all, and
+  # every one of them owned here rather than by an inline rm at the end of its
+  # section: a file that dies partway never reaches those.
+  rm -rf ${d:+"$d"} ${s:+"$s"} ${wtroot:+"$wtroot"} ${wtroot2:+"$wtroot2"} \
+         ${mdd:+"$mdd"} ${shim:+"$shim"} ${prd:+"$prd"} ${spr:+"$spr"} \
+         ${edbin:+"$edbin"} ${rend:+"$rend"} ${sren:+"$sren"} \
+         ${nofzfmd:+"$nofzfmd"} "${_preen_dep_shim:-}"
+  rm -f ${edlog:+"$edlog"} ${raw:+"$raw" "$raw.argv"} \
         ${raw2:+"$raw2" "$raw2.argv" "$raw2.n" "$raw2.level1"} \
         ${raw2t:+"$raw2t" "$raw2t.argv" "$raw2t.n" "$raw2t.level1"}
 }
 trap cleanup EXIT
-s="$(preen_state diff sbs "" "")"
+s="$(preen_state diff sbs "" "")" || exit 1
 
 # printf %q, so a name containing a newline still prints as one readable line
 # in a PASS or FAIL label.
@@ -128,7 +134,7 @@ assert_nonempty "$out" "previews: -leading.txt"
 # The symptom reported in #3: eight files counted, six of them previewable,
 # because the count came from a list of escaped names and the preview tried to
 # open them. Each file carries its own marker, so "shown" is countable.
-wtroot="$(mktemp -d "${TMPDIR:-/tmp}/preen-wtroot.XXXXXX")"
+mktmpd wtroot preen-wtroot
 # A space in the worktree's own path, because that is what tells a quoted
 # expansion from an unquoted one when ctrl-e spends it further down.
 mkdir -p "$wtroot/odd dir"
@@ -146,7 +152,7 @@ printf 'MARKER-newline\n' > "$wt/"$'wt\nnewline.txt'
 # `ls-files --others` does, so a plain name here would prove nothing.
 printf 'MARKER-tracked\n' >> "$wt/"$'two\nlines.txt'
 
-swt="$(preen_state wt sbs "" "")"
+swt="$(preen_state wt sbs "" "")" || exit 1
 out="$(preview "$swt" "$wt")"
 assert_contains "$out" "MARKER-quote"   "worktree preview opens a name with a quote"
 assert_contains "$out" "MARKER-slash"   "worktree preview opens a name with a backslash"
@@ -157,7 +163,7 @@ assert_contains "$out" "MARKER-tracked" "worktree preview shows a modified track
 # The file list inside a worktree, which nothing else in the suite reaches: the
 # ordinary shim stops at level one. Same contract as diff mode — one entry per
 # file, spelled as itself.
-raw2="$(mktemp "${TMPDIR:-/tmp}/preen-raw2.XXXXXX")"
+mktmpf raw2 preen-raw2
 preen_list_raw2 "$raw2" "$d" worktrees
 for n in 'wt"quote.txt' 'wt\slash.txt' $'wt\nnewline.txt' $'two\nlines.txt'; do
   list_has "$raw2" "$n"
@@ -179,8 +185,8 @@ assert_not_contains "$bind" "$wt" "ctrl-e does not paste the worktree path into 
 # shell-quoted filename where fzf puts one, and let a shell have it. A path
 # with a space in it is what an unquoted $PREEN_WT_DIR breaks on.
 cmd="${bind#execute(}"; cmd="${cmd%)}"
-edlog="$(mktemp "${TMPDIR:-/tmp}/preen-ed.XXXXXX")"
-edbin="$(mktemp -d "${TMPDIR:-/tmp}/preen-edbin.XXXXXX")"
+mktmpf edlog preen-ed
+mktmpd edbin preen-edbin
 cat > "$edbin/ed" <<EOF
 #!/bin/sh
 printf '%s\n' "\$#" > "$edlog"
@@ -213,11 +219,12 @@ git -C "$d" worktree remove --force "$wt" 2>/dev/null
 # Nothing crashed. The pane said "2 files" and level two said the branch had
 # changed nothing, which is the whole reason this needs an assertion: the count
 # and the pane contradicted each other and neither looked like an error.
-wtroot2="$(mktemp -d "${TMPDIR:-/tmp}/preen-wtroot2.XXXXXX")"
+mktmpd wtroot2 preen-wtroot2
 # Resolved, because this is the one worktree test that compares preen's idea of
 # the path with the fixture's. git prints the real path, and on macOS $TMPDIR is
 # /var/folders/... — a symlink into /private/var, so the two spellings differ.
-tabwt="$(cd "$wtroot2" && pwd -P)/has"$'\t'"tab"
+resolve_dir wtroot2
+tabwt="$wtroot2/has"$'\t'"tab"
 git -C "$d" worktree add -q -b tabbed "$tabwt" 2>/dev/null
 printf 'MARKER-tab-one\n' > "$tabwt/tab-new1.txt"
 printf 'MARKER-tab-two\n' > "$tabwt/tab-new2.txt"
@@ -240,7 +247,7 @@ assert_true $? "and that path is a directory that exists"
 # The symptom itself, end to end: level two inside that worktree. With the
 # record split in the wrong place `dir` is not a directory, wt_files comes back
 # empty, and preen paints the "changed nothing" placeholder over two real files.
-raw2t="$(mktemp "${TMPDIR:-/tmp}/preen-raw2t.XXXXXX")"
+mktmpf raw2t preen-raw2t
 preen_list_raw2 "$raw2t" "$d" worktrees
 assert_eq "$(list_count "$raw2t")" "2" \
   "level two inside a tab-named worktree lists both its files"
@@ -254,7 +261,7 @@ assert_not_contains "$(tr '\0' '\n' < "$raw2t")" "changed nothing" \
 git -C "$d" worktree remove --force "$tabwt" 2>/dev/null
 
 # ---- md mode: the list comes from find, and has the same two problems -------
-mdd="$(mktemp -d "${TMPDIR:-/tmp}/preen-md.XXXXXX")"
+mktmpd mdd preen-md
 md_names=( 'plain.md' 'has"quote.md' 'back\slash.md' $'two\nlines.md' )
 for n in "${md_names[@]}"; do printf '# heading\n' > "$mdd/$n"; done
 
@@ -300,7 +307,7 @@ assert_eq "$missing" "" "every name md mode listed under -weird is a file that i
 assert_eq "$seen" "2" "that loop saw both of them"
 
 # The complaint itself, which is the part a person sees.
-nofzfmd="$(mktemp -d "${TMPDIR:-/tmp}/preen-nofzfmd.XXXXXX")"
+mktmpd nofzfmd preen-nofzfmd
 printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$nofzfmd/fzf"
 chmod +x "$nofzfmd/fzf"
 # Empty, not "no 'illegal option'": that wording is BSD find's, GNU find says
@@ -316,7 +323,6 @@ preen_list_raw "$raw" "$mdd" md "$mdd/-weird"
 assert_eq "$(list_count "$raw")" "2" "md mode takes an absolute root, which must not be given a ./"
 absq="$(cd "$mdd" && PATH="$nofzfmd:$PATH" "$PREEN" md "$mdd/-weird" 2>&1 >/dev/null </dev/null || true)"
 assert_eq "$absq" "" "and says nothing on stderr about it"
-rm -rf "$nofzfmd"
 
 # ---- pr mode ----------------------------------------------------------------
 # Two separate things to hold shut here.
@@ -337,7 +343,7 @@ rm -rf "$nofzfmd"
 # this file's idea of the format rather than the format. No core.quotePath=false
 # either — this is the spelling the GitHub API returns, where an accented name
 # is octal-escaped as well.
-prd="$(mktemp -d "${TMPDIR:-/tmp}/preen-prsrc.XXXXXX")"
+mktmpd prd preen-prsrc
 git init -q -b main "$prd"
 pr_names=( 'plain.txt' 'with space.txt' 'has"quote.txt' 'back\slash.txt'
            $'tab\there.txt' 'café.txt'
@@ -367,7 +373,7 @@ git -C "$prd" diff HEAD > "$prd/pr.diff"
 pr_run() {
   # pr_run <raw|quoted> -> stubs gh, builds the list into $raw
   local how="$1"
-  shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-gh.XXXXXX")"
+  mktmpd shim preen-gh
   if [ "$how" = quoted ]; then
     ( cd "$prd" && git diff --name-only HEAD ) > "$shim/names"
   else
@@ -389,7 +395,7 @@ GH
   PATH="$shim:$PATH" preen_list_raw "$raw" "$d" pr 7
 }
 
-spr="$(preen_state pr sbs "" "")"
+spr="$(preen_state pr sbs "" "")" || exit 1
 cp "$prd/pr.diff" "$spr/pr.diff"
 
 for how in raw quoted; do
@@ -454,7 +460,7 @@ assert_not_contains "$out" "$mk_x" "pr: and not x.md's block as well"
 # a tail of the real one — and the renamed file would preview blank. The fix
 # has to hand that case back to the tail match, and these names are of unequal
 # length on purpose: `a/a.md b/bbbbb.md` solves to `bbb.md`, which is nobody.
-rend="$(mktemp -d "${TMPDIR:-/tmp}/preen-prren.XXXXXX")"
+mktmpd rend preen-prren
 git init -q -b main "$rend"
 # Long enough that git's similarity detection actually calls it a rename. With
 # a one-line file it reports a delete and an add instead, and both of those
@@ -467,7 +473,7 @@ tgit -C "$rend" mv a.md bbbbb.md
 printf 'RENAMED-AFTER\n' >> "$rend/bbbbb.md"
 tgit -C "$rend" add -A
 
-sren="$(preen_state pr sbs "" "")"
+sren="$(preen_state pr sbs "" "")" || exit 1
 git -C "$rend" diff -M --cached HEAD > "$sren/pr.diff"
 assert_contains "$(grep '^diff --git' "$sren/pr.diff")" 'a/a.md b/bbbbb.md' \
   "the fixture really is a rename, with two different paths in one header"
