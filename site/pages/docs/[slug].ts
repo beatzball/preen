@@ -51,6 +51,9 @@ function computePrevNext(
   };
 }
 
+/** Reports already printed by this build. See where it is read. */
+const reported = new Set<string>();
+
 /**
  * Give every image in the rendered Markdown the attributes it cannot carry
  * itself: an intrinsic size, and lazy loading below the first one.
@@ -72,8 +75,8 @@ function computePrevNext(
  * fallback — a wrong number is worse than none — but on its own it is silent:
  * add a .jpg and that page quietly reserves nothing again, the build passes,
  * the probe passes, and nothing measures CLS. Nobody noticing is the failure
- * mode, so the omission is raised here instead of shipped. The opt-out is to
- * write the width and height yourself; see the message below.
+ * mode, so the omission is raised here instead of shipped. The opt-out is
+ * writing BOTH width and height yourself; see the message below.
  *
  * Reported and `process.exitCode`, deliberately NOT `throw`. litro's page
  * handler wraps every pageData fetcher in a try/catch that calls console.warn
@@ -94,6 +97,9 @@ function annotateImages(
 ): string {
   let seen = 0;
   const unsized: string[] = [];
+  const attr = (name: string, attrs: string) =>
+    // Anchored to a quote or whitespace so `data-width=` cannot match.
+    new RegExp(`[\\s"']${name}\\s*=`).test(' ' + attrs);
 
   const out = html.replace(/<img\b([^>]*)>/g, (tag, attrs: string) => {
     // Count every image, including ones skipped below. Counting only the ones
@@ -102,41 +108,66 @@ function annotateImages(
     const isFirst = ++seen === 1;
     const add: string[] = [];
 
-    // Anchored to a quote or whitespace so `data-loading=` cannot match.
-    if (!isFirst && !/[\s"']loading\s*=/.test(' ' + attrs)) {
+    if (!isFirst && !attr('loading', attrs)) {
       add.push('loading="lazy"', 'decoding="async"');
     }
 
-    // Either attribute written by hand means the author has taken the size on
-    // themselves. That is the opt-out, and it is also why this tests for
-    // EITHER rather than both: with one already present, adding the measured
-    // pair emitted the same attribute twice.
-    const authored = /[\s"']width\s*=/.test(' ' + attrs) || /[\s"']height\s*=/.test(' ' + attrs);
-    if (!authored) {
-      const src = /\ssrc\s*=\s*["']([^"']+)["']/.exec(attrs)?.[1];
+    const hasW = attr('width', attrs);
+    const hasH = attr('height', attrs);
+    const src = /\ssrc\s*=\s*["']([^"']+)["']/.exec(attrs)?.[1] ?? '(no src)';
+
+    if (hasW && hasH) {
+      // Both by hand: the author has taken the size on themselves. This is
+      // the opt-out, and it is the only one.
+    } else if (hasW || hasH) {
+      // Exactly one. The stylesheet sets `max-width:100%; height:auto`, so a
+      // lone dimension gives the browser no ratio and reserves no box — the
+      // original CLS bug, on a tag that looks as though it were handled.
+      //
+      // Deliberately not completed from the header either: the author's
+      // `width="100"` beside a measured `height="620"` is a ratio nobody
+      // chose, which is exactly the wrong number src/image-size.ts refuses to
+      // invent. Reported instead, so the author writes the other half.
+      unsized.push(`${src}  (has ${hasW ? 'width' : 'height'}, needs both)`);
+    } else {
       // Site-root paths only: anything remote has no file to read at build
       // time. It is collected rather than skipped, because an unsized remote
       // image shifts the layout exactly as much as an unsized local one.
-      const local = src?.startsWith('/') && !src.startsWith('//');
-      const size = local ? sizeOf(src!) : null;
+      const local = src.startsWith('/') && !src.startsWith('//');
+      const size = local ? sizeOf(src) : null;
       if (size) add.push(`width="${size.w}"`, `height="${size.h}"`);
-      else unsized.push(src ?? '(no src)');
+      else unsized.push(src);
     }
 
     return add.length ? `<img${attrs} ${add.join(' ')}>` : tag;
   });
 
   if (unsized.length) {
-    console.error(
+    const report =
       `${where}: ${unsized.length} image(s) have no intrinsic size, so the page would ` +
-        `reserve no space for them and the layout would shift as they load:\n` +
-        unsized.map((s) => `  ${s}`).join('\n') +
-        `\nsrc/image-size.ts reads PNG and WebP headers only, and nothing remote can be ` +
-        `measured at build time. Either convert the image to WebP, or write the tag in ` +
-        `the Markdown with the size you want reserved, e.g.\n` +
-        `  <img src="..." alt="..." width="1400" height="620">`,
-    );
-    process.exitCode = 1;
+      `reserve no space for them and the layout would shift as they load:\n` +
+      unsized.map((s) => `  ${s}`).join('\n') +
+      `\nsrc/image-size.ts reads PNG and WebP headers only, and nothing remote can be ` +
+      `measured at build time. Convert the image to WebP, or write the tag in the ` +
+      `Markdown with BOTH dimensions, which is the opt-out, e.g.\n` +
+      `  <img src="..." alt="..." width="1400" height="620">`;
+
+    // Printed once per distinct report. This fetcher runs twice for every doc
+    // — litro's og-handler calls the same pageData to build /__og/<slug>.png —
+    // so without this every list appears twice and a build with a few bad
+    // pages buries each real one in its own duplicate.
+    if (!reported.has(report)) {
+      reported.add(report);
+      console.error(report);
+    }
+    // Guarded because this function is defined in the page component's module
+    // and so is emitted into the client bundle. Nothing calls it there today
+    // (pageData is serialised into the HTML server-side, and vite.config.ts
+    // stubs imageSize away), but `process` does not exist in a browser, and an
+    // unguarded assignment would be a ReferenceError inside litro's catch —
+    // which renders the Loading placeholder, the exact outcome the paragraph
+    // above says this design avoids.
+    if (typeof process !== 'undefined') process.exitCode = 1;
   }
 
   return out;

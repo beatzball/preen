@@ -98,15 +98,41 @@ from and what the OG handler inlines as a data URI at build time. The PNG is
 therefore never served to a browser. **Regenerate the WebP whenever the logo
 changes**, or the site keeps showing the old mark.
 
-### Images are lazy below the first one
+### Images are sized at build time, and lazy below the first one
 
 `pages/docs/[slug].ts` rewrites the rendered Markdown so every image except
-the first carries `loading="lazy" decoding="async"`. Markdown image syntax
-cannot carry an attribute, and the first image is usually above the fold, so
-deferring it would delay the one thing the reader is waiting for.
+the first carries `loading="lazy" decoding="async"`, and so every image
+carries the `width` and `height` read out of its own header. Markdown image
+syntax cannot carry an attribute, and the first image is usually above the
+fold, so deferring it would delay the one thing the reader is waiting for.
+Without the size pair the page reserves no space and every paragraph below
+the image moves once the bytes arrive.
 
-Nothing to do when adding a page. A hand-written `<img>` that sets its own
-`loading` is left alone.
+**Use a `.webp` or a `.png` and there is nothing to do.** Both are read
+straight out of the file, so `![alt](/preen.webp)` is enough. A `?v=2` cache
+buster, a space or an accent in the filename are all handled.
+
+**Anything else fails the build, by design.** A `.jpg`, a `.gif`, an `.svg`, a
+remote URL or a path that is not there cannot be measured, and a page that
+ships without the pair brings the layout shift back silently — so the build
+stops and names the file rather than letting it through:
+
+```
+content/docs/pipes.md: 1 image(s) have no intrinsic size, ...
+  /screenshot.jpg
+```
+
+Two ways out, and the message says both. Convert the image to WebP, which is
+what the rest of the site uses. Or write the tag yourself with **both**
+dimensions, which is the only opt-out:
+
+```html
+<img src="/screenshot.jpg" alt="..." width="1400" height="620">
+```
+
+One dimension is not enough and is reported too: the stylesheet sets
+`height: auto`, so a lone `width` gives the browser no ratio and reserves no
+box. A hand-written `<img>` that sets its own `loading` is left alone.
 
 ## Verify your change
 
@@ -117,8 +143,8 @@ pnpm build          # must exit 0; prints every prerendered route
 ```
 
 `pnpm build` is the real check. It fails on a duplicate slug, a missing
-`title`, or a broken component, and it prints the full route list so you can
-confirm your page is there.
+`title`, a broken component, or an image it cannot measure (see above), and it
+prints the full route list so you can confirm your page is there.
 
 For a live-reload loop while writing:
 
