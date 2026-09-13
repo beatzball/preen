@@ -35,10 +35,17 @@ DRY=0
 # Rejected rather than ignored: a mistyped flag that silently started a real
 # encode would fail much later, on a missing gif2webp, and read as a broken
 # runner rather than a broken argument.
-case "${1-}" in
-  '')        ;;
-  --dry-run) DRY=1 ;;
-  *) printf 'sync-assets: unknown argument: %s\n' "$1" >&2; exit 2 ;;
+#
+# Matched on the count as well as the value, so "no arguments" means no
+# arguments. Testing `$1` alone let two things through: an empty first
+# argument matched the '' branch and started a real encode, and a second
+# argument was dropped on the floor entirely.
+case "$#:${1-}" in
+  0:)          ;;
+  1:--dry-run) DRY=1 ;;
+  *) printf 'sync-assets: bad arguments (%d): %s\n' "$#" "$*" >&2
+     printf 'usage: sync-assets.sh [--dry-run]\n' >&2
+     exit 2 ;;
 esac
 
 cd "$(dirname "$0")"

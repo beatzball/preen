@@ -23,3 +23,12 @@ updates:
       actions:
         patterns:
           - "*"
+# Expect the first round to be large. The pins freeze what the floating major
+# tags were already serving, and those majors have moved on: checkout,
+# setup-node and upload-artifact are on v7, build-push-action on v7, buildx on
+# v4, pnpm/action-setup on v6. So the first grouped pull request carries six
+# MAJOR bumps, not six patches. Read it as six upgrades that happen to arrive
+# together, and check each new SHA the way the originals were checked -- the
+# major ref, then `git/tags/<sha>` where the ref points at a tag object rather
+# than a commit, which is the step that looks identical to success when it is
+# skipped.
