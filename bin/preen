@@ -131,32 +131,62 @@ wt_files() {
 # path with an odd character in it, and git learned it in 2.36; older git gets
 # the plain form reshaped to match, which carries a quote or a backslash fine
 # and stumbles only on a newline in a worktree's own directory name.
+#
+# Which of the two ran is the one thing that decides whether a path can have
+# arrived cut short, so it is written down rather than guessed at from the
+# paths. A marker file, because this runs in a process substitution and a
+# variable set here would not outlive it.
 wt_records() {
   git worktree list --porcelain -z 2>/dev/null && return 0
+  : > "$PREEN_STATE/no-z"
   git worktree list --porcelain 2>/dev/null | tr '\n' '\0'
 }
 
-# What "stumbles" means, and what preen does about it.
+# Whether preen can open what git named.
 #
-# The plain --porcelain form prints each path on its own line, so a directory
-# name containing a newline is indistinguishable from two records: the path
-# reaches wt_list cut short at the newline. That is not a dropped entry, it is a
-# PLAUSIBLE WRONG ONE -- the line reads as an ordinary worktree, says
-# "0 files" and "detached", and previews and opens nothing, because the
-# directory it names was never there.
+# `-d` alone is not the question, and reading it as one is what made this wrong.
+# git prints a worktree whose directory someone deleted without running
+# `git worktree prune`, and it prints a locked one on a disk that is not
+# mounted; neither is a directory, on any version of git. So `-d` answers "is
+# it there", never "did the fallback cut this short".
 #
-# A newline in a worktree's own path is simply out of reach on a git that has
-# no `worktree list -z`. There is no way back: the fallback has already lost
-# which lines belong to the path, and guessing would trade a wrong entry for a
-# differently wrong one. So preen drops the entry and says so, rather than
-# listing something the rest of the mode cannot honor.
+# On the fallback there is a second way to be fooled: a path cut at a newline
+# that STARTS the last component leaves the parent directory, which is real. A
+# worktree always carries a `.git` entry and a bare parent does not, so that is
+# the question to ask there. On the -z path git's answer is exact and `-d` is
+# the whole of it.
+wt_reachable() {
+  [ -d "$1" ] || return 1
+  [ -f "$PREEN_STATE/no-z" ] || return 0
+  [ -e "$1/.git" ]
+}
+
+# What preen does with a worktree git named but preen cannot open, and what it
+# is allowed to say about why.
 #
-# The saying-so is the point, and it has to go where it can still be read. fzf
-# takes the whole screen, so anything written to stderr before it starts is
-# wiped; the picker's own header is the one place that survives. wt_list writes
-# the truncated paths here and wt_loop puts this line above the list.
+# Two different things land here. A worktree whose directory was deleted without
+# a `git worktree prune` -- the ordinary state of a repository people work in --
+# and, on the fallback only, a path cut short at a newline, because the plain
+# --porcelain form puts each path on its own line and cannot tell one path with
+# a newline from two records.
+#
+# Either way the entry is dropped rather than listed. Listing it gives a
+# PLAUSIBLE WRONG ONE: a row that reads as an ordinary worktree, says "0 files"
+# and "detached", and previews and opens nothing.
+#
+# The REASON is the part that has to be earned. Only the fallback can cut a path
+# short, so only the fallback may blame the git version; saying so on a git that
+# has -z tells the reader to upgrade something already new and hides the real
+# fix. So the count and "git listed it, it is not there" lead -- true on every
+# git -- and the advice follows from which form actually ran.
+#
+# It goes in the picker's header because fzf takes the whole screen and paints
+# over anything written before it starts. That header sits in the narrow list
+# column and is cut off there, which is the other reason the true half leads:
+# the part that survives the cut is the part that is always right. The die path
+# has the whole width, so it names the paths as well.
 wt_unlistable_note() {
-  local n word
+  local n what
   # Tested before it is read, not with `2>/dev/null` on the redirection: bash
   # reports a failed `<` itself, before the command's own stderr is redirected
   # anywhere, so every ordinary run -- the file is absent for all of them --
@@ -164,9 +194,13 @@ wt_unlistable_note() {
   [ -s "$PREEN_STATE/unlistable" ] || return 1
   n="$(wc -l < "$PREEN_STATE/unlistable" | tr -d ' ')"
   [ "$n" -gt 0 ] 2>/dev/null || return 1
-  [ "$n" = 1 ] && word=worktree || word=worktrees
-  printf '%s %s hidden: a newline in the directory name needs git 2.36, and this git has no "worktree list -z"' \
-    "$n" "$word"
+  if [ "$n" = 1 ]; then what="1 worktree git listed is not there"
+  else                  what="$n worktrees git listed are not there"; fi
+  if [ -f "$PREEN_STATE/no-z" ]; then
+    printf '%s — or holds a newline, which this git cannot spell (needs git 2.36)' "$what"
+  else
+    printf '%s — run: git worktree prune' "$what"
+  fi
 }
 
 # one record per worktree: a padded label for the eye, then $WT_SEP and the
@@ -181,7 +215,10 @@ wt_unlistable_note() {
 # handed the callbacks the tail of the label rather than the path -- a count of
 # 2 files beside a blank preview and a level two that said nothing had changed.
 # NUL is taken (it separates the records), so this is US, 0x1f, which fzf
-# accepts as a --delimiter and which no sane path holds.
+# accepts as a --delimiter and which no real path holds. A path CAN hold one --
+# mkdir will make it -- and such a path splits the record wrong in exactly the
+# way a tab used to. That is the standing limit of any separator; 0x1f is the
+# byte that makes it unreachable rather than merely unlikely.
 #
 # Everything here is NUL-terminated, so the count counts records: `wc -l` on a
 # -z stream answers 0.
@@ -194,10 +231,12 @@ wt_list() {
     # long label and nothing else. Skipping it here would promote the next
     # record to root and drop a real worktree from the list, which is worse.
     [ -n "$root" ] || { root="$path"; continue; }
-    # A path git has just printed is a directory that exists. One that is not is
-    # the pre-2.36 truncation above, and listing it would be the lie this mode
-    # cannot afford. Set it aside; wt_loop names the count in the header.
-    [ -d "$path" ] || { printf '%s\n' "$path" >> "$PREEN_STATE/unlistable"; continue; }
+    # git names worktrees preen cannot open -- one whose directory was deleted
+    # without a prune, or, on the fallback, one whose path arrived cut short.
+    # Listing either is the lie this mode cannot afford. Set it aside;
+    # wt_unlistable_note says how many and, as far as it is knowable, why.
+    wt_reachable "$path" \
+      || { printf '%s\n' "$path" >> "$PREEN_STATE/unlistable"; continue; }
     base="$(wt_base "$path" 2>/dev/null)"
     n=0
     while IFS= read -r -d '' f; do
@@ -642,8 +681,12 @@ if [ "$KIND" = wt ]; then
   WTS=(${FILES[@]+"${FILES[@]}"})
   if [ ${#WTS[@]} -eq 0 ]; then
     # "no worktrees besides the main checkout" would be a lie when preen just
-    # dropped the only one it was given. Say which it is.
-    if WT_NOTE="$(wt_unlistable_note)"; then die "$WT_NOTE"; fi
+    # dropped the only one it was given. Say which it is -- and here, unlike the
+    # header, there is room to name it.
+    if WT_NOTE="$(wt_unlistable_note)"; then
+      die "$WT_NOTE
+$(sed 's/^/  /' "$PREEN_STATE/unlistable")"
+    fi
     die "no worktrees besides the main checkout (see: git worktree list)"
   fi
   wt_loop
