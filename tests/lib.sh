@@ -185,7 +185,11 @@ n=\$(cat "$out.n" 2>/dev/null || echo 0)
 n=\$((n + 1)); printf '%s' "\$n" > "$out.n"
 case "\$n" in
   1) cat > "$out.level1"
-     # the record fzf would print on enter: label, a tab, then the path
+     # The record fzf would print on enter, fed back whole: label, preen's own
+     # field separator, then the path. Which byte that is stays preen's
+     # business, never this shim's.
+     # (No dollar sign anywhere in here: this heredoc is unquoted, so a name
+     #  written out would be expanded by the test shell and tripped by set -u.)
      tr '\0' '\n' < "$out.level1" | head -n 1 ;;
   2) printf '%s\n' "\$@" > "$out.argv"
      cat > "$out" ;;

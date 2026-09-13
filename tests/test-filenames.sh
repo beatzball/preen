@@ -228,7 +228,7 @@ preen_list_raw "$raw" "$d" worktrees
 # below cannot pass by agreeing with a guess hard-coded in this file.
 US="$(printf '\037')"
 sep="$(list_flags "$raw" | sed -n 's/^--delimiter=//p')"
-assert_eq "$sep" "$US" "the worktree record is joined on US (0x1f), which a path cannot hold"
+assert_eq "$sep" "$US" "fzf is told to split the worktree record on US (0x1f), not on a tab"
 
 # The field the callbacks are spent: it has to be the worktree, tab and all.
 rec=""; IFS= read -r -d '' rec < "$raw" || true
@@ -307,6 +307,15 @@ chmod +x "$nofzfmd/fzf"
 # "unknown predicate", and the run has nothing to say on stderr either way.
 mderr="$(cd "$mdd" && PATH="$nofzfmd:$PATH" "$PREEN" md -weird 2>&1 >/dev/null </dev/null || true)"
 assert_eq "$mderr" "" "md mode on a dash-leading directory is silent: no complaint, no 'nothing to show'"
+
+# The `./` goes on ONLY a relative root. `./` in front of an absolute path makes
+# it relative again, so `find` is handed a path that is not there — and from a
+# cwd of `/` that mistake hides, because `.//abs` resolves back to `/abs`. This
+# runs from $mdd, which is not `/`, so the wrong edit cannot pass.
+preen_list_raw "$raw" "$mdd" md "$mdd/-weird"
+assert_eq "$(list_count "$raw")" "2" "md mode takes an absolute root, which must not be given a ./"
+absq="$(cd "$mdd" && PATH="$nofzfmd:$PATH" "$PREEN" md "$mdd/-weird" 2>&1 >/dev/null </dev/null || true)"
+assert_eq "$absq" "" "and says nothing on stderr about it"
 rm -rf "$nofzfmd"
 
 # ---- pr mode ----------------------------------------------------------------

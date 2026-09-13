@@ -21,7 +21,7 @@ here: half of what preen does is read the repository it is standing in.
 
 ## How preen is driven without a terminal
 
-preen's picker is `fzf`, which cannot be driven headlessly. Three seams get at
+preen's picker is `fzf`, which cannot be driven headlessly. Four seams get at
 everything that matters without it:
 
 - **The file list.** `preen_list` puts a fake `fzf` first on `PATH` that writes
@@ -34,11 +34,16 @@ everything that matters without it:
   name survives it, and no assertion about the bytes can see a flag.
   `preen_list_raw2` accepts the first record instead of exiting, which is what
   drives worktrees mode into its file list — the level nothing else reaches.
+- **What preen says before the picker.** A stand-in `fzf` that reads its stdin
+  and exits, so preen can be run all the way through and graded on its stderr
+  and its exit. That is the only way to reach the messages preen prints instead
+  of a list, and it is what keeps a run that should die from opening a real
+  picker and hanging the suite.
 
-Neither is a workaround: both are the real entry points, and the list is taken
-from preen rather than rebuilt here. A test that reimplemented the git commands
-would grade its own copy and keep passing after `bin/preen` changed underneath
-it.
+None of them is a workaround: all four are the real entry points, and the list
+is taken from preen rather than rebuilt here. A test that reimplemented the git
+commands would grade its own copy and keep passing after `bin/preen` changed
+underneath it.
 
 `$PREEN` is always the binary in this checkout, never whatever is on the
 developer's `PATH` — a suite that silently graded the installed copy would be
@@ -49,13 +54,13 @@ green for the wrong reason.
 | file | covers |
 |---|---|
 | `test-diff-list.sh` | the list from the root and from a subdirectory, a revision argument, a repo with no commit, staged and unstaged together |
-| `test-worktrees.sh` | the count agrees with the level-one preview, merge-base rather than the branch tip, the main checkout is excluded, read-only, and the pre-2.36 fallback — including the worktree it has to drop and say so about |
+| `test-worktrees.sh` | the count agrees with the level-one preview, merge-base rather than the branch tip, the main checkout is excluded, read-only, the pre-2.36 fallback, and the two kinds of worktree it has to drop — one git cannot spell and one that was deleted without a prune — each with the reason it is allowed to give |
 | `test-stdin.sh` | the diff/markdown sniff, including `---` alone staying markdown and a `--color=always` diff still reading as a diff |
 | `test-filenames.sh` | accented names, spaces, a leading dash, and the quote, backslash, tab and newline cases from #3 — in diff, md, pr and both levels of worktrees, plus a tab in a worktree's own directory name, a dash-leading directory in md mode, a PR file named ` b/x.md`, the `--read0` fzf is given and the `ctrl-e` binding a worktree path is spent through |
 | `test-pr.sh` | four `gh` calls whatever the file count, previews slice the cache, read-only |
 | `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
 
-## Eleven bugs these exist to hold shut
+## Thirteen bugs these exist to hold shut
 
 Each was found by review, fixed, and is now covered. Reverting any one of the
 fixes turns this suite red:
@@ -84,11 +89,23 @@ fixes turns this suite red:
   The record was `label <tab> path` and the label already ended with that path,
   so the callbacks were handed the tail of the label. The pane counted the files
   and then said the branch had changed nothing. The two fields are joined on US
-  (0x1f) now, which a path cannot hold.
+  (0x1f) now. A path can technically hold one, and such a path still splits
+  wrong; no byte is safe from that, and 0x1f is the one no real name uses.
 - **On git older than 2.36 a newline in a worktree's directory name listed a
   worktree that was not there.** The fallback prints each path on its own line,
   so the path arrived cut short — not a missing entry but a plausible wrong one.
   That entry is dropped now, and the picker's header says one went.
+- **A worktree deleted without a prune was blamed on the git version.** The
+  check above first asked only "is the path a directory", which is also false
+  for a worktree someone `rm -rf`'d and did not `git worktree prune` — on every
+  git. preen then told them a newline needed git 2.36, on a git that had `-z`
+  and a name with no newline in it, and exited 1 if that was the only worktree.
+  Only the fallback can cut a path short, so only the fallback names the git
+  version now; everything else is told to prune.
+- **The fallback listed a worktree's parent as a worktree** when the newline
+  started the last path component, because the cut path was then a real
+  directory. A worktree carries a `.git` entry and a bare parent does not, and
+  that is what the fallback asks.
 - **`preen md` on a dash-leading directory found nothing.** `find -weird` read
   the name as options. The root gets a `./`, and the names keep it, because
   glow and `$EDITOR` would read the name as options in turn.
