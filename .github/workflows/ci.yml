@@ -81,7 +81,7 @@ jobs:
         run: |
           echo "::error::${{ runner.os }} has no dependency step in this job. Add one, or drop the OS from the matrix."
           exit 1
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # Pin the interpreter before any step reads it. `bin/preen`, the
       # installer and every test file are `#!/usr/bin/env bash`, so the version
       # they run under is whichever bash PATH resolves -- and if this image
@@ -233,15 +233,15 @@ jobs:
       run:
         working-directory: site
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
         with:
           # `defaults.run.working-directory` above applies to `run:` steps
           # only, not to an action's inputs — without this the action looks for
           # packageManager in a package.json at the repo root, which does not
           # exist, and fails with "No pnpm version is specified".
           package_json_file: site/package.json
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           # Matches site/Dockerfile, so CI and the deployed image agree.
           node-version: '22'
@@ -293,7 +293,7 @@ jobs:
         # type=gha build cache in smoke-image. Checked by running this step on
         # a real run under `contents: read` rather than reasoned about.
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: playwright-report
           path: site/playwright-report/
@@ -320,10 +320,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [site]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
       - name: Build image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: ./site
           load: true
@@ -365,7 +365,7 @@ jobs:
     outputs:
       changed: ${{ steps.gate.outputs.changed }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with: { fetch-depth: 0 }
       - name: Did this push touch the site?
         id: gate
@@ -427,7 +427,7 @@ jobs:
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Probe production
         env:
           PREEN_EXPECT_COMMIT: ${{ github.sha }}
