@@ -12,7 +12,7 @@ the version check preen makes at startup and CI never installs it.
 `python3` is for two things. `with_tty` allocates a pty so the tests can reach
 the code preen runs on a terminal — `pager()` branches on `[ -t 1 ]`, and a test
 harness only ever offers a pipe, so there is no other way in. `list_has` and its
-neighbours read the file list, which is NUL-delimited and holds a name with a
+neighbors read the file list, which is NUL-delimited and holds a name with a
 newline in it: the pair of bytes no line-oriented tool can handle at once.
 
 Every test builds a throwaway repository under `$TMPDIR` and removes it on

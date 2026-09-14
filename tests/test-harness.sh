@@ -41,7 +41,7 @@ mktmpd box preen-harness
 
 # ---- 1. the shapes that did the damage, forbidden at the source -------------
 #
-# Greps, not behaviour, and deliberately so: the three reverts that slipped past
+# Greps, not behavior, and deliberately so: the three reverts that slipped past
 # the first version of this file were all source edits, and each is refused here
 # the moment it is written rather than only when some run happens to reach it.
 #

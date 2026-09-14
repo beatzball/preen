@@ -162,7 +162,7 @@ function annotateImages(
     }
     // Guarded because this function is defined in the page component's module
     // and so is emitted into the client bundle. Nothing calls it there today
-    // (pageData is serialised into the HTML server-side, and vite.config.ts
+    // (pageData is serialized into the HTML server-side, and vite.config.ts
     // stubs imageSize away), but `process` does not exist in a browser, and an
     // unguarded assignment would be a ReferenceError inside litro's catch —
     // which renders the Loading placeholder, the exact outcome the paragraph

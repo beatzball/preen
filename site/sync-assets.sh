@@ -72,7 +72,7 @@ GIFS=(
 )
 
 # Stills. -q 90 is visually lossless on a terminal screenshot, which is flat
-# colour and text rather than photography.
+# color and text rather than photography.
 PNGS=(
   preen-md.png        # docs/getting-started
 )
@@ -127,7 +127,7 @@ done
 # Lossless, and not resized. It is the brand mark, so a lossy pass is not worth
 # the 6KB it would save; and resizing it costs bytes rather than saving them —
 # the mark is a flat gradient that palettes well, and resampling introduces
-# intermediate colours that compress worse than the original.
+# intermediate colors that compress worse than the original.
 #
 # public/logo.png stays. The favicon pipeline and the OG card both need a PNG,
 # and the OG handler inlines it as a data URI at build time, so it is never

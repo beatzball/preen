@@ -74,7 +74,7 @@ function fileFor(src: string): string | null {
 }
 
 /**
- * Returns null for anything unrecognised or unreadable. A wrong number is
+ * Returns null for anything unrecognized or unreadable. A wrong number is
  * worse than none, so there is no guessing here — but null is now a build
  * failure at the call site rather than a silently unsized image. See
  * annotateImages in pages/docs/[slug].ts.

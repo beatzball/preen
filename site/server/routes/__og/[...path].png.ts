@@ -20,7 +20,7 @@ import { routes, pageModules } from '#litro/page-manifest';
  *
  * The template is not parameterised for this, so rather than fork the whole
  * card, take what the default builds and enlarge the one <img> in it. The top
- * row is `alignItems: center`, so a taller box stays centred on the name.
+ * row is `alignItems: center`, so a taller box stays centered on the name.
  */
 const LOGO_SIZE = 64;
 
