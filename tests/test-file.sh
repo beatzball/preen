@@ -10,7 +10,7 @@ set -u
 
 # Both dependencies are shimmed, so the assertions are about preen's choices
 # and never about how glow or less happen to format a page.
-shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-file.XXXXXX")"
+mktmpd shim preen-file
 mark="$shim/pager"
 doc="$shim/note.md"
 # lib.sh sets its own EXIT trap for the glow version stub, and a second trap
@@ -111,7 +111,7 @@ assert_true $? "rendering one file exits 0"
 #
 # fzf binds it as execute($SELF --show {}), which hands the child the real
 # terminal, so the pty here is what that key press actually looks like.
-st="$(preen_state md)"
+st="$(preen_state md)" || exit 1
 rm -f "$mark"
 out="$(with_tty env PATH="$shim:$PATH" PREEN_STATE="$st" "$PREEN" --show "$doc" | tr -d '\r')"
 assert_contains "$out" "RENDERED note.md" "enter renders the file"

@@ -11,7 +11,7 @@
 set -u
 . "$(dirname "$0")/lib.sh"
 
-d="$(new_repo)"; s=""; e=""
+d="$(new_repo)" || exit 1; s=""; e=""
 trap 'rm -rf "$d" "$s" "$e" "${_preen_dep_shim:-}"' EXIT
 
 mkdir -p "$d/sub"
@@ -40,7 +40,7 @@ assert_eq "$got" "1" "untracked path stays repo-root-relative from a subdirector
 # ---- every entry in the list can actually be opened --------------------------
 # A list is only correct if each entry previews. preen runs its preview from
 # the repository root, because fzf inherits that cwd.
-s="$(preen_state diff sbs "" "")"
+s="$(preen_state diff sbs "" "")" || exit 1
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   out="$(cd "$d" && preview "$s" "$f")"
@@ -66,7 +66,7 @@ assert_contains "$got" "sub/deep.txt" "list against a revision"
 # ---- a repository with no commit yet ----------------------------------------
 # preen falls back to the index when there is no HEAD. Without that branch it
 # dies on `git diff HEAD` rather than showing the staged files.
-e="$(mktemp -d "${TMPDIR:-/tmp}/preen-empty.XXXXXX")"
+mktmpd e preen-empty
 git init -q -b main "$e"
 printf 'staged\n' > "$e/a.txt"
 git -C "$e" add -A
@@ -89,7 +89,7 @@ assert_eq "$got" "a.txt " "list in a repository with no commit"
 # its byte, while en_US.UTF-8 folds case and ignores the leading punctuation.
 # So this also fails if the sorts stop pinning the locale, whatever locale the
 # person running the suite happens to have.
-o_repo="$(new_repo)"
+o_repo="$(new_repo)" || exit 1
 printf 'zz\n' > "$o_repo/zz-tracked.txt"
 printf 'zz\n' > "$o_repo/Zebra.txt"
 printf 'zz\n' > "$o_repo/_under.txt"
@@ -100,7 +100,7 @@ printf 'more\n' >> "$o_repo/_under.txt"
 printf 'new\n'  > "$o_repo/aa-untracked.txt"
 printf 'new\n'  > "$o_repo/-dash.txt"
 
-o="$(mktemp "${TMPDIR:-/tmp}/preen-order.XXXXXX")"
+mktmpf o preen-order
 preen_list_raw "$o" "$o_repo" diff
 assert_eq "$(preen_list "$o_repo" diff | tr '\n' ' ')" \
   "-dash.txt Zebra.txt _under.txt aa-untracked.txt zz-tracked.txt " \

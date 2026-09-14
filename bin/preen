@@ -131,32 +131,151 @@ wt_files() {
 # path with an odd character in it, and git learned it in 2.36; older git gets
 # the plain form reshaped to match, which carries a quote or a backslash fine
 # and stumbles only on a newline in a worktree's own directory name.
+#
+# Which of the two ran is the one thing that decides whether a path can have
+# arrived cut short, so it is written down rather than guessed at from the
+# paths. A marker file, because this runs in a process substitution and a
+# variable set here would not outlive it.
 wt_records() {
   git worktree list --porcelain -z 2>/dev/null && return 0
+  : > "$PREEN_STATE/no-z"
   git worktree list --porcelain 2>/dev/null | tr '\n' '\0'
 }
 
-# one record per worktree: a padded label for the eye, then a tab and the
+# Whether preen can open what git named.
+#
+# `-d` alone is not the question, and reading it as one is what made this wrong.
+# git prints a worktree whose directory someone deleted without running
+# `git worktree prune`, and it prints a locked one on a disk that is not
+# mounted; neither is a directory, on any version of git. So `-d` answers "is
+# it there", never "did the fallback cut this short".
+#
+# On the fallback a cut path can also land on something real, and then nothing
+# above notices. Four shapes, all of them things git cannot have printed:
+#
+#   a trailing slash          a newline STARTING the last component leaves the
+#                             parent -- and git never prints a trailing slash
+#   the root                  a worktree at <root><newline>tail cuts to <root>
+#   a path already listed     a worktree nested in another cuts to the outer
+#                             one, and `wts/a<newline>b` cuts to `wts/a` --
+#                             git lists each worktree exactly once
+#
+# The `.git` test alone passes all three, because what the cut landed on IS a
+# worktree. The shape is what gives those three away.
+#
+# It does not give everything away, and the limit is worth stating rather than
+# implying. A cut that lands on a nested clone, or on a submodule's gitfile, has
+# a `.git`, no trailing slash, is not the root and was not listed before -- so it
+# is listed, in silence. Telling that from a real worktree means asking git which
+# repository the path belongs to, which is a git call per record on the one path
+# that exists because git is too old to answer properly. It needs a pre-2.36 git,
+# a newline in a worktree name, AND a clone or submodule sitting exactly at the
+# cut, so it is left.
+#
+# None of this is checked on the -z path: there the answer is exact, and a real
+# path may look however it likes.
+wt_reachable() {
+  local path="$1" root="$2"
+  [ -d "$path" ] || return 1
+  [ -f "$PREEN_STATE/no-z" ] || return 0
+  [ -e "$path/.git" ] || return 1
+  case "$path" in */) return 1 ;; esac
+  [ "$path" = "$root" ] && return 1
+  # The seen list only ever holds paths with no newline in them: on the fallback
+  # a path that has one arrives cut, so it is never recorded whole. That is what
+  # makes a line-oriented check safe here.
+  ! grep -qxF -- "$path" "$PREEN_STATE/wt-seen" 2>/dev/null
+}
+
+# What preen does with a worktree git named but preen cannot open, and what it
+# is allowed to say about why.
+#
+# Two different things land here. A worktree whose directory was deleted without
+# a `git worktree prune` -- the ordinary state of a repository people work in --
+# and, on the fallback only, a path cut short at a newline, because the plain
+# --porcelain form puts each path on its own line and cannot tell one path with
+# a newline from two records.
+#
+# Either way the entry is dropped rather than listed. Listing it gives a
+# PLAUSIBLE WRONG ONE: a row that reads as an ordinary worktree, says "0 files"
+# and "detached", and previews and opens nothing.
+#
+# The REASON is the part that has to be earned. Only the fallback can cut a path
+# short, so only the fallback may blame the git version; saying so on a git that
+# has -z tells the reader to upgrade something already new and hides the real
+# fix. So the count and "git listed it, it is not there" lead -- true on every
+# git -- and the advice follows from which form actually ran.
+#
+# It goes in the picker's header because fzf takes the whole screen and paints
+# over anything written before it starts. That header sits in the narrow list
+# column and is cut off there, which is the other reason the true half leads:
+# the part that survives the cut is the part that is always right. The die path
+# has the whole width, so it names the paths as well.
+wt_unlistable_note() {
+  local n what
+  # Tested before it is read, not with `2>/dev/null` on the redirection: bash
+  # reports a failed `<` itself, before the command's own stderr is redirected
+  # anywhere, so every ordinary run -- the file is absent for all of them --
+  # would have scribbled "No such file or directory" onto the terminal.
+  [ -s "$PREEN_STATE/unlistable" ] || return 1
+  n="$(wc -l < "$PREEN_STATE/unlistable" | tr -d ' ')"
+  [ "$n" -gt 0 ] 2>/dev/null || return 1
+  if [ "$n" = 1 ]; then what="1 worktree git listed is not there"
+  else                  what="$n worktrees git listed are not there"; fi
+  if [ -f "$PREEN_STATE/no-z" ]; then
+    printf '%s — or holds a newline, which this git cannot spell (needs git 2.36)' "$what"
+  else
+    # Conditional, because "not there" still has more than one cause here. A
+    # worktree locked on a disk that is not mounted is also not there, and prune
+    # will not touch it -- by design, that is what the lock is for. Advice that
+    # cannot work is the thing this message exists to stop giving.
+    printf '%s — if it is gone for good: git worktree prune' "$what"
+  fi
+}
+
+# one record per worktree: a padded label for the eye, then $WT_SEP and the
 # absolute path for the callbacks. git always prints the main checkout first,
 # and that is not what this mode is about, so the first record becomes the root
 # and is dropped from the list. The count leads because the list pane is narrow
 # and a long path is the one column that can afford to run off the end.
 #
+# The label ENDS with the worktree's path relative to the root, so the byte that
+# joins the two fields must be one that path cannot contain. A tab can: a tab in
+# a directory name used to put a second tab in the record, and fzf's `{2}` then
+# handed the callbacks the tail of the label rather than the path -- a count of
+# 2 files beside a blank preview and a level two that said nothing had changed.
+# NUL is taken (it separates the records), so this is US, 0x1f, which fzf
+# accepts as a --delimiter and which no real path holds. A path CAN hold one --
+# mkdir will make it -- and such a path splits the record wrong in exactly the
+# way a tab used to. That is the standing limit of any separator; 0x1f is the
+# byte that makes it unreachable rather than merely unlikely.
+#
 # Everything here is NUL-terminated, so the count counts records: `wc -l` on a
 # -z stream answers 0.
+WT_SEP=$'\037'
 wt_list() {
   local root="" rec path base n word f
   while IFS= read -r -d '' rec; do
     case "$rec" in "worktree "*) path="${rec#worktree }" ;; *) continue ;; esac
+    # The root is only ever used to trim the label, so a truncated one costs a
+    # long label and nothing else. Skipping it here would promote the next
+    # record to root and drop a real worktree from the list, which is worse.
     [ -n "$root" ] || { root="$path"; continue; }
+    # git names worktrees preen cannot open -- one whose directory was deleted
+    # without a prune, or, on the fallback, one whose path arrived cut short.
+    # Listing either is the lie this mode cannot afford. Set it aside;
+    # wt_unlistable_note says how many and, as far as it is knowable, why.
+    wt_reachable "$path" "$root" \
+      || { printf '%s\n' "$path" >> "$PREEN_STATE/unlistable"; continue; }
+    printf '%s\n' "$path" >> "$PREEN_STATE/wt-seen"
     base="$(wt_base "$path" 2>/dev/null)"
     n=0
     while IFS= read -r -d '' f; do
       [ -n "$f" ] && n=$((n + 1))
     done < <(wt_files "$path" "$base")
     [ "$n" = 1 ] && word=file || word=files
-    printf '%4s %-5s  %-24s  %s\t%s\0' \
-      "$n" "$word" "$(wt_branch "$path")" "${path#"$root"/}" "$path"
+    printf '%4s %-5s  %-24s  %s%s%s\0' \
+      "$n" "$word" "$(wt_branch "$path")" "${path#"$root"/}" "$WT_SEP" "$path"
   done < <(wt_records)
 }
 
@@ -255,6 +374,25 @@ pr_slice() {
       if (!start) return ""
       return substr(unq(substr(line, start, length(line) - start + 1)), 3)
     }
+    # An unquoted header is `diff --git a/P b/P` for everything except a
+    # rename, and that shape is solvable rather than guessable: both paths are
+    # the same P, so length(P) is fixed by the length of the rest. Returns ""
+    # when the reconstruction does not hold -- a rename, whose two paths differ
+    # -- and the tail match settles that case as it did before.
+    #
+    # This is what the tail match on its own got wrong. A file named ` b/x.md`
+    # gives `diff --git a/ b/x.md b/ b/x.md`, whose last seven bytes are
+    # ` b/x.md` -- so slicing for `x.md` matched that block too and the preview
+    # showed two files stitched together. Nothing was dropped; there was just
+    # more of it than the file had.
+    function apair(line,   rest, n, p) {
+      rest = substr(line, 12)                 # past "diff --git "
+      n = (length(rest) - 5) / 2
+      if (n < 1 || n != int(n)) return ""
+      p = substr(rest, length(rest) - n + 1)
+      if (rest != "a/" p " b/" p) return ""
+      return p
+    }
     BEGIN {
       f = ENVIRON["PREEN_PR_FILE"]
       g = quoted(f) ? unq(f) : f          # in case gh handed us a quoted name
@@ -263,6 +401,7 @@ pr_slice() {
     }
     /^diff --git / {
       b = bpath($0)
+      if (b == "") b = apair($0)      # unquoted, and not a rename
       if (b != "")
         inblk = (b == f || b == g)
       else
@@ -463,7 +602,16 @@ need_glow
 
 # ---- state shared with the fzf callbacks ------------------------------------
 # built before the file list because pr mode caches its diff in here
-PREEN_STATE="$(mktemp -d "${TMPDIR:-/tmp}/preen.XXXXXX")"
+#
+# Checked, because an unchecked mktemp returns EMPTY and every line below then
+# writes to the filesystem root -- /kind, /mode, /no-z, /unlistable, /wt-seen --
+# and the trap says `rm -rf ""`. On a machine where that root is writable it is
+# the same class of bug as the one the test suite twice inflicted on this
+# checkout, and the mode would carry on looking like it worked.
+PREEN_STATE="$(mktemp -d "${TMPDIR:-/tmp}/preen.XXXXXX" 2>/dev/null)" \
+  || PREEN_STATE=""
+[ -n "$PREEN_STATE" ] && [ -d "$PREEN_STATE" ] \
+  || die "no temporary directory under TMPDIR=${TMPDIR:-/tmp}"
 trap 'rm -rf "$PREEN_STATE"' EXIT
 echo "$KIND" > "$PREEN_STATE/kind"
 case "${PREEN_LAYOUT:-sbs}" in inline) echo inline ;; *) echo sbs ;; esac > "$PREEN_STATE/mode"
@@ -490,7 +638,7 @@ run_picker() {
     --layout=reverse \
     --border=rounded \
     --border-label="$LABEL" \
-    --delimiter=$'\t' --with-nth="$WITH_NTH" \
+    --delimiter="$WT_SEP" --with-nth="$WITH_NTH" \
     --preview "$SELF --preview $PICK" \
     --preview-window 'right,65%,border-left' \
     --header "$HEADER" \
@@ -519,7 +667,7 @@ run_picker() {
 # the same enter binding as diff mode. esc at level two falls out of the inner
 # picker and the loop paints level one again.
 wt_loop() {
-  local sel dir base branch
+  local sel dir base branch note
   while :; do
     echo wt > "$PREEN_STATE/kind"
     : > "$PREEN_STATE/dir"; : > "$PREEN_STATE/rev"
@@ -527,11 +675,14 @@ wt_loop() {
     LABEL=" preen · worktrees "
     PROMPT='  worktree ❯ '
     HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · esc quit'
+    # A list that is short because preen dropped something has to say so on the
+    # list, not on a stderr fzf has already painted over.
+    note="$(wt_unlistable_note)" && HEADER="$HEADER"$'\n'"$note"
     sel="$(run_picker)"
     [ -n "$sel" ] || return 0
     [ -f "$PREEN_STATE/quit" ] && return 0
 
-    dir="${sel#*$'\t'}"
+    dir="${sel#*"$WT_SEP"}"
     base="$(wt_base "$dir" 2>/dev/null)"
     branch="$(wt_branch "$dir")"
     collect_files < <(wt_files "$dir" "$base")
@@ -568,18 +719,42 @@ if [ "$KIND" = wt ]; then
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
   collect_files < <(wt_list)
   WTS=(${FILES[@]+"${FILES[@]}"})
-  [ ${#WTS[@]} -gt 0 ] \
-    || die "no worktrees besides the main checkout (see: git worktree list)"
+  if [ ${#WTS[@]} -eq 0 ]; then
+    # "no worktrees besides the main checkout" would be a lie when preen just
+    # dropped the only one it was given. Say which it is -- and here, unlike the
+    # header, there is room to name it.
+    if WT_NOTE="$(wt_unlistable_note)"; then
+      die "$WT_NOTE
+$(sed 's/^/  /' "$PREEN_STATE/unlistable")"
+    fi
+    die "no worktrees besides the main checkout (see: git worktree list)"
+  fi
   wt_loop
   exit 0
 elif [ "$KIND" = md ]; then
   command -v delta >/dev/null || true
+  # A directory whose name starts with a dash is read by find as a bundle of
+  # options -- `preen md -weird` answered `find: illegal option -- w` and then
+  # "nothing to show (md mode)". A `./` in front settles it, and only a relative
+  # path needs one: `./` before an absolute path would make it relative again.
+  MDROOT="${TARGET:-.}"
+  case "$MDROOT" in -*) MDROOT="./$MDROOT" ;; esac
   # -print0 for the same reason git gets -z: find is the only thing that knows
   # the name, and a newline in it would otherwise arrive as two half-names.
-  collect_files < <(find "${TARGET:-.}" -type f \( -name '*.md' -o -name '*.markdown' \) \
+  collect_files < <(find "$MDROOT" -type f \( -name '*.md' -o -name '*.markdown' \) \
                       -not -path '*/.git/*' -not -path '*/node_modules/*' -print0 | LC_ALL=C sort -z)
+  # `find .` prints `./README.md`, and the leading `./` is noise in the picker.
+  # It is not noise on a name that would otherwise start with a dash: that one
+  # is passed on to glow and to $EDITOR, which would read it as an option in
+  # turn. Trimming it there would trade find's complaint for a blank preview.
   i=0
-  while [ "$i" -lt ${#FILES[@]} ]; do FILES[$i]="${FILES[$i]#./}"; i=$((i + 1)); done
+  while [ "$i" -lt ${#FILES[@]} ]; do
+    case "${FILES[$i]}" in
+      ./-*) : ;;
+      *)    FILES[$i]="${FILES[$i]#./}" ;;
+    esac
+    i=$((i + 1))
+  done
   HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nenter render · ctrl-e edit · ctrl-/ hide · esc quit'
 elif [ "$KIND" = pr ]; then
   # read-only: the PR is fetched over the API, never checked out, so the

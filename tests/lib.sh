@@ -63,6 +63,63 @@ assert_nonempty() {
 
 # ---- fixtures ---------------------------------------------------------------
 
+# ---- temporary paths, and why nothing here calls mktemp directly ------------
+#
+# Every path this suite builds comes from mktemp, and those paths are then fed
+# to `rm -rf`, to `cd`, and to `git -C`. An unguarded `mktemp` that fails prints
+# nothing and returns empty, and all three of those do something bad with an
+# empty string:
+#
+#   rm -rf "$x/sub"   removes ./sub  — or, via the next line, the checkout
+#   cd ""             SUCCEEDS and stays put, so `cd "$x" && pwd -P` hands back
+#                     the current directory: the checkout, for a trap to delete
+#   git -C ""         acts on the repository the suite is running from
+#
+# None of that is hypothetical. This suite has deleted its own tests/ directory
+# and committed the working tree to the live branch, both from nothing more than
+# a $TMPDIR that no longer existed.
+#
+# So the failure is made loud once, here, and no test calls mktemp itself. These
+# take the NAME of a variable and set it, rather than printing: a function whose
+# output is captured with $(...) runs in a subshell, where `exit` ends only the
+# subshell and the caller carries on with the empty string that started this.
+_preen_tmpfail() {
+  printf '  FAIL: no temporary %s under TMPDIR=%s\n' "$1" "${TMPDIR:-/tmp}"
+  printf 'RUNNER: refusing to continue — an empty path here reaches rm -rf, cd and git -C\n' >&2
+  exit 1
+}
+
+mktmpd() {
+  # mktmpd <varname> <name> -> sets <varname> to a fresh directory, or exits
+  local _v="$1" _p
+  _p="$(mktemp -d "${TMPDIR:-/tmp}/$2.XXXXXX" 2>/dev/null)" || _p=""
+  [ -n "$_p" ] && [ -d "$_p" ] || _preen_tmpfail "directory ($2)"
+  eval "$_v=\$_p"
+}
+
+mktmpf() {
+  # mktmpf <varname> <name> -> sets <varname> to a fresh file, or exits
+  local _v="$1" _p
+  _p="$(mktemp "${TMPDIR:-/tmp}/$2.XXXXXX" 2>/dev/null)" || _p=""
+  [ -n "$_p" ] && [ -f "$_p" ] || _preen_tmpfail "file ($2)"
+  eval "$_v=\$_p"
+}
+
+resolve_dir() {
+  # resolve_dir <varname> -> rewrites <varname> as its physical path, or exits
+  #
+  # `cd "" && pwd -P` is the line that deleted tests/. It does not fail: cd with
+  # an empty argument stays in the current directory and pwd answers for that,
+  # so an empty variable comes back as the checkout. The emptiness is refused
+  # before cd ever sees it.
+  local _v="$1" _cur _p
+  eval "_cur=\${$_v:-}"
+  [ -n "$_cur" ] && [ -d "$_cur" ] || _preen_tmpfail "directory to resolve (\$$_v)"
+  _p="$(cd "$_cur" && pwd -P)" || _preen_tmpfail "physical path for \$$_v"
+  [ -n "$_p" ] || _preen_tmpfail "physical path for \$$_v"
+  eval "$_v=\$_p"
+}
+
 # Commit without depending on the developer's git identity, and without writing
 # to their config.
 #
@@ -73,7 +130,12 @@ tgit() { git -c user.name=preen-test -c user.email=test@example.com "$@"; }
 
 new_repo() {
   # new_repo -> prints the path of a fresh repo with one commit
-  local d; d="$(mktemp -d "${TMPDIR:-/tmp}/preen-test.XXXXXX")"
+  #
+  # Call it as `d="$(new_repo)" || exit 1`. This runs in a subshell, so when
+  # mktmpd cannot get a directory it can only end the subshell; without the
+  # `|| exit 1` the caller carries on with an empty d, and the `git -C "$d"`
+  # lines below act on the repository the suite is running from.
+  local d; mktmpd d preen-test
   git init -q -b main "$d"
   printf 'base\n' > "$d/f.txt"
   tgit -C "$d" add -A; tgit -C "$d" commit -qm init
@@ -92,7 +154,8 @@ new_repo() {
 
 preen_state() {
   # preen_state <kind> [mode] [rev] [dir] -> prints a state dir
-  local d; d="$(mktemp -d "${TMPDIR:-/tmp}/preen-state.XXXXXX")"
+  # Same contract as new_repo: `s="$(preen_state ...)" || exit 1`.
+  local d; mktmpd d preen-state
   printf '%s' "${1:-diff}"  > "$d/kind"
   printf '%s' "${2:-sbs}"   > "$d/mode"
   printf '%s' "${3:-}"      > "$d/rev"
@@ -146,7 +209,7 @@ preen_list_raw() {
   local out="$1" cwd="$2"; shift 2
   local shim
   [ -n "$out" ] || { printf '  FAIL: preen_list_raw was given no outfile\n'; return 1; }
-  shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-shim.XXXXXX")"
+  mktmpd shim preen-shim
   # Truncate both, so a run that dies before reaching fzf leaves an empty list
   # rather than the previous call's one for the next assertions to grade.
   : > "$out"; : > "$out.argv"
@@ -177,7 +240,7 @@ preen_list_raw2() {
   local out="$1" cwd="$2"; shift 2
   local shim
   [ -n "$out" ] || { printf '  FAIL: preen_list_raw2 was given no outfile\n'; return 1; }
-  shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-shim2.XXXXXX")"
+  mktmpd shim preen-shim2
   : > "$out"; : > "$out.argv"; rm -f "$out.n"
   cat > "$shim/fzf" <<EOF
 #!/bin/sh
@@ -185,7 +248,11 @@ n=\$(cat "$out.n" 2>/dev/null || echo 0)
 n=\$((n + 1)); printf '%s' "\$n" > "$out.n"
 case "\$n" in
   1) cat > "$out.level1"
-     # the record fzf would print on enter: label, a tab, then the path
+     # The record fzf would print on enter, fed back whole: label, preen's own
+     # field separator, then the path. Which byte that is stays preen's
+     # business, never this shim's.
+     # (No dollar sign anywhere in here: this heredoc is unquoted, so a name
+     #  written out would be expanded by the test shell and tripped by set -u.)
      tr '\0' '\n' < "$out.level1" | head -n 1 ;;
   2) printf '%s\n' "\$@" > "$out.argv"
      cat > "$out" ;;
@@ -219,7 +286,7 @@ preen_list() {
   # For the many names that hold no newline this is the readable form. A test
   # about a name that does hold one wants preen_list_raw and list_has.
   local cwd="$1"; shift
-  local raw; raw="$(mktemp "${TMPDIR:-/tmp}/preen-list.XXXXXX")"
+  local raw; mktmpf raw preen-list
   preen_list_raw "$raw" "$cwd" "$@"
   tr '\0' '\n' < "$raw"
   rm -f "$raw" "$raw.argv"       # the recorded flags go with it
@@ -303,7 +370,7 @@ print(len(names))
 #
 # delta and fzf are NOT stubbed here: several tests assert on rendered diff
 # content, and fzf is stubbed per-call by preen_list where it matters.
-_preen_dep_shim="$(mktemp -d "${TMPDIR:-/tmp}/preen-dep.XXXXXX")"
+mktmpd _preen_dep_shim preen-dep
 if ! command -v glow >/dev/null 2>&1; then
   cat > "$_preen_dep_shim/glow" <<'EOF'
 #!/bin/sh
