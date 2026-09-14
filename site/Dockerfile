@@ -11,7 +11,26 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
-RUN pnpm build
+
+# Drop nitro's build manifest before it can be copied anywhere. `nitro build`
+# writes dist/static/nitro.json -- a build timestamp, the nitro version and an
+# `npx serve .` preview command -- and the COPY in stage 2 would otherwise take
+# it with everything else. Nothing on the site fetches it, so serving it only
+# adds a public URL that changes on every deploy.
+#
+# Removed rather than given a cache rule in nginx.conf: a file nobody requests
+# does not need a correct cache policy, it needs to not be there. The
+# /version.json rule in nginx.conf exists because that file IS fetched, by the
+# deploy gate; this one has no such reader.
+#
+# In this stage, not after the COPY. `COPY` then `RUN rm` in the serving stage
+# only writes a whiteout: the 232 bytes stay in the layer underneath and ship
+# with every pull. Deleting it here means the file never reaches a layer that
+# is kept. Confirmed with `docker save`, see the pull request.
+#
+# nginx then answers /nitro.json with a 404, and the `location /` block
+# deliberately omits `always`, so that 404 carries no Cache-Control at all.
+RUN pnpm build && rm -f dist/static/nitro.json
 
 # Stage 2: Serve
 FROM nginx:alpine
