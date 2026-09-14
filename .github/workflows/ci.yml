@@ -1,6 +1,31 @@
 name: ci
 on: [push, pull_request]
 
+# Stated rather than inherited. With no block here every job gets whatever the
+# repository default happens to be -- read-write in a repo created before the
+# default changed, and changeable from a setting nothing in this file can see.
+# On a push to main that token is live in the same run as the job holding
+# COOLIFY_API_TOKEN, so it is worth saying out loud what it may do.
+#
+# `contents: read` is the whole of it, and no job overrides it, because none
+# of them writes anything back to GitHub: the four that check out only read,
+# `deploy` reaches Coolify over a webhook with its own separate secret, and
+# `verify-prod` only makes HTTP requests to the live site.
+#
+# This narrows more than it looks. The repository default is already `read`,
+# so the block reads like a restatement -- but naming ANY scope here sets
+# every unnamed one to `none`, while the default `read` grants read on all of
+# them. The runner prints the result, and it changed: before this block the
+# `GITHUB_TOKEN Permissions` group listed Contents, Metadata and **Packages**;
+# now it lists Contents and Metadata. Nothing wants Packages -- site/Dockerfile
+# builds from node:22-slim and nginx:alpine on Docker Hub, and there is no
+# docker/login-action and no ghcr reference anywhere in this file.
+#
+# The upload-artifact step in `site` is the one that looks like an exception
+# and is not -- see the note on it below.
+permissions:
+  contents: read
+
 jobs:
   # preen is a bash script, so the cheapest useful check is that it parses.
   # `bash -n` catches an unclosed quote or a broken heredoc, which is most of
@@ -27,7 +52,36 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      # FIRST, and it has to stay first. The two dependency steps further down
+      # are `if: runner.os == 'Linux'` and `if: runner.os == 'macOS'`, with no
+      # `else`: add windows-latest and both are skipped, nothing installs, and
+      # `Test suite` dies inside the suite on a missing fzf. This names the OS
+      # that has no dependency step instead.
+      #
+      # Position is the whole of whether that works. Every other `run:` step
+      # in this job has a bash body -- `command -v`, a `for` loop, `bash -n`
+      # -- and `run:` on a Windows runner is pwsh, because nothing here sets
+      # `shell:`. So any of them placed above this one fails first, with a
+      # PowerShell parser error inside a bash loop, and Actions then skips
+      # every later step including this one. The reader would get exactly the
+      # confusing failure this exists to replace, and never see the message.
+      # Even `actions/checkout` is below it: this step needs no checkout, only
+      # `runner.os`, so there is nothing to put above it.
+      #
+      # `echo` and `exit 1` are the whole body deliberately -- both are valid
+      # in pwsh as well as bash, so the step behaves on a runner whose default
+      # shell this workflow has never pinned. `${{ runner.os }}` is likewise a
+      # template expansion rather than `$RUNNER_OS`: Actions substitutes it
+      # before any shell sees it, so it reads correctly under both.
+      #
+      # Skipped on both real runners today -- that is the point, and it is the
+      # one cost: one skipped step per leg.
+      - name: Unsupported runner OS
+        if: runner.os != 'Linux' && runner.os != 'macOS'
+        run: |
+          echo "::error::${{ runner.os }} has no dependency step in this job. Add one, or drop the OS from the matrix."
+          exit 1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       # Pin the interpreter before any step reads it. `bin/preen`, the
       # installer and every test file are `#!/usr/bin/env bash`, so the version
       # they run under is whichever bash PATH resolves -- and if this image
@@ -87,6 +141,70 @@ jobs:
         run: |
           ./install.sh --dry-run > /dev/null || exit 1
           echo "ok  install.sh --dry-run"
+      # The third of the three, and until now the odd one out: site/sync-assets.sh
+      # had the `bash -n` above and nothing else. No job ran it and the site
+      # build does not call it either, so a tape renamed in demo/ or a typo in
+      # an output path shipped green. --dry-run resolves every source path and
+      # every destination directory and writes nothing, so it needs no webp
+      # installed and costs this job no encode time.
+      #
+      # The exit status is not enough on its own, and this is the half that
+      # matters. --dry-run checks that each destination's DIRECTORY exists; it
+      # cannot check the filename, because any name inside public/ satisfies
+      # it. So `public/preen.webp` mistyped as `public/preen.wepb` passes the
+      # script, passes a real encode, writes bytes nothing reads, and leaves
+      # the stale recording in place -- verbatim the failure #27 was filed
+      # about. Nothing downstream notices either: the .webp files are
+      # committed, so the build and Playwright both find the old one.
+      #
+      # Hence the list below. Every name in it is load-bearing -- the site
+      # references them literally:
+      #
+      #   public/preen.webp        site/content/docs/getting-started.md:14
+      #                            site/pages/index.ts:233
+      #   public/preen-md.webp     site/content/docs/getting-started.md:31
+      #   public/preen-pipes.webp  site/content/docs/pipes.md:10
+      #   public/preen-pr.webp     site/content/docs/pull-requests.md:8
+      #   public/logo.webp         site/pages/index.ts:167
+      #                            site/src/components/starlight-header.ts:326
+      #
+      # It is written out HERE rather than read back from the script on
+      # purpose. Asking sync-assets.sh what it intends to write and then
+      # checking it wrote that would agree with itself whatever it said, typo
+      # included. The list has to be one the script cannot edit. The cost is
+      # that a genuinely new tape means editing two files; the error below
+      # says so, and the .webp has to be committed for the site to serve it
+      # anyway.
+      #
+      # This also catches the cruder ways the script stops working: gutted to
+      # `exit 0`, or with an emptied GIFS/PNGS list, it prints nothing and the
+      # comparison fails -- on BOTH runners, and naming the real reason.
+      # `set -u` alone catches the empty list only on macOS bash 3.2, and only
+      # as "unbound variable".
+      #
+      # LC_ALL=C on the sort because this repo runs BSD and GNU sort side by
+      # side, and their default collation disagrees about punctuation --
+      # `preen-pr` vs `preen.webp` is exactly the pair that would differ.
+      - name: Asset sync writes the files the site reads
+        run: |
+          out="$RUNNER_TEMP/sync-assets-dry-run.txt"
+          site/sync-assets.sh --dry-run > "$out" || exit 1
+          # Echoed in full: these paths are the evidence the script ran, and
+          # the first thing to read when a rename is what broke.
+          cat "$out"
+          expected=$(printf '%s\n' \
+            public/logo.webp \
+            public/preen-md.webp \
+            public/preen-pipes.webp \
+            public/preen-pr.webp \
+            public/preen.webp)
+          actual=$(awk '$1 == "would" && $2 == "write" { print $3 }' "$out" | LC_ALL=C sort)
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::site/sync-assets.sh no longer writes the files the site reads. Fix the script, or update this list and commit the new .webp."
+            printf 'expected:\n%s\ngot:\n%s\n' "$expected" "$actual" >&2
+            exit 1
+          fi
+          echo "ok  site/sync-assets.sh --dry-run (5 destinations, all as expected)"
       # The behaviour suite. Parsing the shell says nothing about what the tool
       # does; this drives preen against throwaway repositories and checks the
       # file lists, the previews, the stdin sniff, and that the review modes
@@ -115,15 +233,15 @@ jobs:
       run:
         working-directory: site
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4.3.0
         with:
           # `defaults.run.working-directory` above applies to `run:` steps
           # only, not to an action's inputs — without this the action looks for
           # packageManager in a package.json at the repo root, which does not
           # exist, and fails with "No pnpm version is specified".
           package_json_file: site/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           # Matches site/Dockerfile, so CI and the deployed image agree.
           node-version: '22'
@@ -167,8 +285,15 @@ jobs:
         # explain why are thrown away with the runner. Each target reports into
         # its own subdirectory, so the passing run does not overwrite the
         # failing one.
+        #
+        # No `actions: write` for this, and none needed: upload-artifact v4
+        # talks to the artifact service with ACTIONS_RUNTIME_TOKEN, which the
+        # runner mints per job and which the `permissions:` block at the top
+        # does not govern. The same is true of `cache: pnpm` above and of the
+        # type=gha build cache in smoke-image. Checked by running this step on
+        # a real run under `contents: read` rather than reasoned about.
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: playwright-report
           path: site/playwright-report/
@@ -195,10 +320,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [site]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: ./site
           load: true
@@ -240,7 +365,7 @@ jobs:
     outputs:
       changed: ${{ steps.gate.outputs.changed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with: { fetch-depth: 0 }
       - name: Did this push touch the site?
         id: gate
@@ -302,7 +427,7 @@ jobs:
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Probe production
         env:
           PREEN_EXPECT_COMMIT: ${{ github.sha }}
@@ -310,9 +435,21 @@ jobs:
           # cold, uncached build: 60 x 10s = 10 minutes.
           PREEN_PROBE_RETRIES: '60'
           PREEN_PROBE_DELAY: '10'
+          # Through `env:`, like PREEN_EXPECT_COMMIT above, rather than
+          # `${{ }}` inside the `run:` body. A template expansion there is
+          # textual substitution performed before any shell starts, so a value
+          # holding a quote or `$(...)` becomes part of the command rather
+          # than an argument to it. This one is an admin-set repository
+          # variable, so it was never the likely way in -- but it was the last
+          # interpolation of a non-constant into a shell body in this file,
+          # and the whole point of the block at the top is that the workflow
+          # says what it may do.
+          PROD_BASE_URL: ${{ vars.PROD_BASE_URL }}
         run: |
-          if [ -z "${{ vars.PROD_BASE_URL }}" ]; then
+          # An `env:` value is always defined, empty when the variable is
+          # unset, so the -z test still reads the "not configured" case.
+          if [ -z "$PROD_BASE_URL" ]; then
             echo "::error::PROD_BASE_URL is not set, so the deploy cannot be verified."
             exit 1
           fi
-          sh scripts/verify-site.sh "${{ vars.PROD_BASE_URL }}"
+          sh scripts/verify-site.sh "$PROD_BASE_URL"
