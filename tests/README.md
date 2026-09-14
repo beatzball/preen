@@ -53,7 +53,7 @@ green for the wrong reason.
 
 | file | covers |
 |---|---|
-| `test-harness.sh` | the harness itself: the shapes that caused the damage are forbidden at the source, the guards are called directly, and every temporary-path site in every file is failed in turn while the checkout is watched. The slow half of the suite — see below |
+| `test-harness.sh` | the harness itself: the shapes that caused the damage are forbidden at the source in any spelling, the guards are called directly, and the first use of every template name in every file is failed in turn while the checkout is watched. The slow half of the suite — see below |
 | `test-diff-list.sh` | the list from the root and from a subdirectory, a revision argument, a repo with no commit, staged and unstaged together |
 | `test-worktrees.sh` | the count agrees with the level-one preview, merge-base rather than the branch tip, the main checkout is excluded, read-only, the pre-2.36 fallback, and the two kinds of worktree it has to drop — one git cannot spell and one that was deleted without a prune — each with the reason it is allowed to give |
 | `test-stdin.sh` | the diff/markdown sniff, including `---` alone staying markdown and a `--color=always` diff still reading as a diff |
@@ -61,7 +61,7 @@ green for the wrong reason.
 | `test-pr.sh` | four `gh` calls whatever the file count, previews slice the cache, read-only |
 | `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
 
-## Sixteen bugs these exist to hold shut
+## Seventeen bugs these exist to hold shut
 
 Each was found by review, fixed, and is now covered. Reverting any one of the
 fixes turns this suite red:
@@ -124,7 +124,14 @@ fixes turns this suite red:
   `$TMPDIR` from the first call, so every file died at `lib.sh`'s own first
   `mktemp` and no guard past that line was ever reached: the exact line that
   deleted `tests/` could be put back and the suite stayed green. The sweep aims
-  the failure at one site at a time now, so the run reaches it.
+  the failure at one use of one name at a time now, so the run reaches it.
+- **And then it still passed on two ordinary spellings of that line.** Failing
+  *every* use of a name killed the file at the first one, so a later site sharing
+  the name was never reached; and the source rules matched `=$(mktemp` and
+  `cd "$x" && pwd` exactly, so `x="$( mktemp -d )"`, `cd "${x}" && pwd -P` and
+  ``x=`new_repo` `` all walked past. The rules match the word `mktemp`, any
+  `&& pwd`, and both capture forms now, and the sweep fails the Nth use rather
+  than all of them.
 - **preen's own state directory was unchecked too.** With an empty
   `$PREEN_STATE` it wrote `/kind`, `/mode` and `/rev` at the filesystem root and
   exited 0.
@@ -147,19 +154,36 @@ preen, and it is in three parts because they hold different things:
   is a source edit, and this is what refuses it the moment it is written.
 - **the guards, called directly.** `mktmpd`, `mktmpf` and `resolve_dir` must exit
   rather than hand back an empty string, and say what they could not get.
-- **every site, end to end.** One run per temporary-path site, with `mktemp`
-  failing at that site and nowhere else so the run reaches it, against a
-  throwaway copy of the checkout that is watched for deleted files, staged
-  changes and new commits.
+- **the first use of every template name, end to end.** One run per job, with
+  `mktemp` failing at ONE use of one name and nowhere else so the run reaches it,
+  against a throwaway copy of the checkout that is watched for deleted files,
+  staged changes and new commits.
 
-The sweep is keyed on the site NAME, never on a call index: an index moves with
-the environment — a git hook that calls `mktemp` shifts every number after it —
-and it reads raw `mktemp` templates as well as guarded ones, so a site that is
-reverted to a raw call stays under the sweep instead of quietly leaving it.
+The sweep is keyed on the template NAME and the Nth use of it, never on a call
+index: an index moves with the environment, since a git hook that calls `mktemp`
+shifts every number after it. It reads raw `mktemp` templates as well as guarded
+calls, so a site reverted to a raw call stays under the sweep instead of quietly
+leaving it.
 
-It is the slow half of the suite: about 40 runs of real fixture work, four at a
-time. `PREEN_HARNESS_JOBS=8 tests/run.sh` widens that if the machine has the
-cores.
+**What it covers, exactly.** By default the FIRST use of every name in every
+file — about 55 jobs against roughly 210 real `mktemp` calls, because names like
+`preen-test` and `preen-shim` are used many times over. The deeper uses of a
+shared name are not swept by default; the rule in part 1 is what covers them, by
+leaving no raw `mktemp` anywhere outside `lib.sh` for an unchecked path to come
+from. `PREEN_HARNESS_DEPTH=full` sweeps every use of every name instead, which
+costs a dry run per file plus one job per use and takes several minutes.
+
+Every job also reports whether its failure actually **fired**. Without that a
+job whose file died earlier comes back green having graded nothing, which is how
+two earlier versions of this file looked healthy while holding almost nothing.
+The run prints how many of its jobs fired, and fails if that count collapses.
+
+It is the slow half of the suite — more than all the other files together: about
+55 runs of real fixture work, four at a time, which takes the whole suite from
+roughly 30s to two and a half minutes. `PREEN_HARNESS_JOBS=8 tests/run.sh`
+widens the batch if the machine has the cores. On a loaded machine the whole
+suite can take several minutes, which is worth knowing before putting it behind
+a short timeout.
 
 ## Writing a new one
 
