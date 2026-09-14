@@ -46,7 +46,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       # Not fail-fast: when a change breaks one platform, the interesting
-      # question is immediately whether it broke the other, and cancelling the
+      # question is immediately whether it broke the other, and canceling the
       # sibling job throws that answer away.
       fail-fast: false
       matrix:
@@ -205,7 +205,7 @@ jobs:
             exit 1
           fi
           echo "ok  site/sync-assets.sh --dry-run (5 destinations, all as expected)"
-      # The behaviour suite. Parsing the shell says nothing about what the tool
+      # The behavior suite. Parsing the shell says nothing about what the tool
       # does; this drives preen against throwaway repositories and checks the
       # file lists, the previews, the stdin sniff, and that the review modes
       # write nothing.

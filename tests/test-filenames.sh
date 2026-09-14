@@ -410,7 +410,7 @@ for how in raw quoted; do
   # grade the wrong thing.
   # Which order gh lists them in is gh's business, so this collects the marker
   # each preview carried and checks the SET: every file exactly once means no
-  # entry opened a neighbour's block and none opened nothing.
+  # entry opened a neighbor's block and none opened nothing.
   blank=""; seen=0; marks=""
   while IFS= read -r -d '' entry || [ -n "$entry" ]; do
     out="$(preview "$spr" "$entry")"
@@ -484,6 +484,6 @@ assert_not_contains "$out" "UNTOUCHED-BODY" "pr: and not the next file's along w
 
 
 # ---- ordinary names are untouched by any of this ----------------------------
-# None of the above may change behaviour for the names everyone actually uses.
+# None of the above may change behavior for the names everyone actually uses.
 plain="$(preen_list "$d" diff | grep -c '^plain.txt$')"
 assert_eq "$plain" "1" "an ordinary name is listed exactly once, unchanged"

@@ -125,4 +125,4 @@ Read by `install.sh`:
 | `PREEN_DIR` | where preen is cloned (same as `--dir`) |
 | `PREEN_PREFIX` | where `preen` is linked (same as `--prefix`) |
 | `PREEN_REPO_URL` | the repository to clone from |
-| `NO_COLOR` | set it to get plain, uncoloured installer output |
+| `NO_COLOR` | set it to get plain, uncolored installer output |

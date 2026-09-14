@@ -154,7 +154,7 @@ cat >> docs/design.md <<'A'
 
 ## Unicode
 
-Accented input is normalised to NFKD and stripped to ASCII before slugging,
+Accented input is normalized to NFKD and stripped to ASCII before slugging,
 so `Café` and `Cafe` land on the same slug.
 A
 g commit -qam "docs: note the unicode rule"

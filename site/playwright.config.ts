@@ -10,7 +10,7 @@ const PORT = Number(process.env.LITRO_E2E_PORT ?? 4321);
 //              ships. This is the artifact production actually serves.
 //
 // Both matter, because the two builds are not the same program. What only
-// `preview` can catch is client code whose behaviour differs between them —
+// `preview` can catch is client code whose behavior differs between them —
 // anything behind `import.meta.env.PROD`, anything the minifier or the
 // tree-shaker rewrites, anything that depends on being a bundled chunk rather
 // than a module served from source. A `throw` inside `if (import.meta.env.PROD)`

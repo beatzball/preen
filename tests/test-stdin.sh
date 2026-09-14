@@ -56,9 +56,9 @@ assert_eq "$got" "glow" "frontmatter stays markdown"
 got="$(printf '# Heading\n\nA paragraph.\n' | rendered_by)"
 assert_eq "$got" "glow" "ordinary markdown goes to glow"
 
-# ---- a coloured diff ---------------------------------------------------------
+# ---- a colored diff ----------------------------------------------------------
 # git diff --color=always paints its own headers, so the sniff strips ANSI
-# first. Without that step ^--- never matches and a coloured diff is read as
+# first. Without that step ^--- never matches and a colored diff is read as
 # markdown — the exact case the docs promise works.
 d="$(new_repo)" || exit 1; trap 'rm -rf "$d" "${_preen_dep_shim:-}"' EXIT
 printf 'changed\n' >> "$d/f.txt"
@@ -69,7 +69,7 @@ assert_eq "$got" "delta" "a --color=always diff is still read as a diff"
 out="$(printf '' | "$PREEN" - 2>&1 || true)"
 assert_contains "$out" "nothing on stdin" "empty input is refused by name"
 
-# ---- colour survives into a pipe --------------------------------------------
+# ---- color survives into a pipe ---------------------------------------------
 # The promise is that redirecting to a file keeps the escapes, so `less -R`
 # later looks the same as it did live.
 out="$(git -C "$d" diff | "$PREEN" - 2>/dev/null | cat -v | head -40)"
