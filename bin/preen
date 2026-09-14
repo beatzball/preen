@@ -161,8 +161,19 @@ wt_records() {
 #                             git lists each worktree exactly once
 #
 # The `.git` test alone passes all three, because what the cut landed on IS a
-# worktree. Only the shape gives them away. None of this is checked on the -z
-# path: there the answer is exact, and a real path may look however it likes.
+# worktree. The shape is what gives those three away.
+#
+# It does not give everything away, and the limit is worth stating rather than
+# implying. A cut that lands on a nested clone, or on a submodule's gitfile, has
+# a `.git`, no trailing slash, is not the root and was not listed before -- so it
+# is listed, in silence. Telling that from a real worktree means asking git which
+# repository the path belongs to, which is a git call per record on the one path
+# that exists because git is too old to answer properly. It needs a pre-2.36 git,
+# a newline in a worktree name, AND a clone or submodule sitting exactly at the
+# cut, so it is left.
+#
+# None of this is checked on the -z path: there the answer is exact, and a real
+# path may look however it likes.
 wt_reachable() {
   local path="$1" root="$2"
   [ -d "$path" ] || return 1
@@ -591,7 +602,16 @@ need_glow
 
 # ---- state shared with the fzf callbacks ------------------------------------
 # built before the file list because pr mode caches its diff in here
-PREEN_STATE="$(mktemp -d "${TMPDIR:-/tmp}/preen.XXXXXX")"
+#
+# Checked, because an unchecked mktemp returns EMPTY and every line below then
+# writes to the filesystem root -- /kind, /mode, /no-z, /unlistable, /wt-seen --
+# and the trap says `rm -rf ""`. On a machine where that root is writable it is
+# the same class of bug as the one the test suite twice inflicted on this
+# checkout, and the mode would carry on looking like it worked.
+PREEN_STATE="$(mktemp -d "${TMPDIR:-/tmp}/preen.XXXXXX" 2>/dev/null)" \
+  || PREEN_STATE=""
+[ -n "$PREEN_STATE" ] && [ -d "$PREEN_STATE" ] \
+  || die "no temporary directory under TMPDIR=${TMPDIR:-/tmp}"
 trap 'rm -rf "$PREEN_STATE"' EXIT
 echo "$KIND" > "$PREEN_STATE/kind"
 case "${PREEN_LAYOUT:-sbs}" in inline) echo inline ;; *) echo sbs ;; esac > "$PREEN_STATE/mode"

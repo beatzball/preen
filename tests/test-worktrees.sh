@@ -351,6 +351,36 @@ assert_contains "$scnote" "not there" "and it is reported rather than dropped in
 # shows the root's branch and never that name. Two assertions that go red beat
 # three where one is cover.
 
+# Each of the three checks needs a fixture that REACHES it. sc3 above cuts to
+# `<root>/`, which the trailing-slash check refuses first — so with only these
+# fixtures the root check and the `.git` check could both be deleted and the
+# suite stayed green. Two more, each shaped to get past the checks before it.
+
+# the root check: a worktree that is a SIBLING of the root, so the cut is the
+# root exactly, with no trailing slash to catch it first
+sc4="$scen/rootexact"
+git init -q -b main "$sc4"; printf 'b\n' > "$sc4/f.txt"
+tgit -C "$sc4" add -A; tgit -C "$sc4" commit -qm i
+git -C "$sc4" worktree add -q -b sc-sib "$sc4"$'\n'"x" 2>/dev/null
+git -C "$sc4" worktree add -q -b sc-ok4 "$sc4/ok" 2>/dev/null
+scen_run "$sc4"
+assert_eq "$sccount" "1" \
+  "a cut path that IS the root, with no trailing slash, is not listed as a worktree"
+assert_contains "$scnote" "not there" "and is reported"
+
+# the .git check: the cut lands on a plain directory — no trailing slash, not the
+# root, not already listed, and not a worktree either
+sc5="$scen/plaindir"
+git init -q -b main "$sc5"; printf 'b\n' > "$sc5/f.txt"
+tgit -C "$sc5" add -A; tgit -C "$sc5" commit -qm i
+mkdir -p "$sc5/wts/x"
+git -C "$sc5" worktree add -q -b sc-py "$sc5/wts/x"$'\n'"y" 2>/dev/null
+git -C "$sc5" worktree add -q -b sc-ok5 "$sc5/ok" 2>/dev/null
+scen_run "$sc5"
+assert_eq "$sccount" "1" \
+  "a cut path that is a plain directory, not a worktree, is not listed as one"
+assert_contains "$scnote" "not there" "and is reported too"
+
 # The note is looked up on every run, and on almost every run there is nothing
 # to report. Reading a file that is not there is the ordinary case, so it has to
 # be silent: preen's stderr is the user's terminal, and the picker is about to

@@ -53,7 +53,7 @@ green for the wrong reason.
 
 | file | covers |
 |---|---|
-| `test-harness.sh` | the harness itself: with an unusable `TMPDIR` the suite must delete nothing in the checkout, commit nothing to its branch, and fail loudly |
+| `test-harness.sh` | the harness itself: the shapes that caused the damage are forbidden at the source, the guards are called directly, and every temporary-path site in every file is failed in turn while the checkout is watched. The slow half of the suite — see below |
 | `test-diff-list.sh` | the list from the root and from a subdirectory, a revision argument, a repo with no commit, staged and unstaged together |
 | `test-worktrees.sh` | the count agrees with the level-one preview, merge-base rather than the branch tip, the main checkout is excluded, read-only, the pre-2.36 fallback, and the two kinds of worktree it has to drop — one git cannot spell and one that was deleted without a prune — each with the reason it is allowed to give |
 | `test-stdin.sh` | the diff/markdown sniff, including `---` alone staying markdown and a `--color=always` diff still reading as a diff |
@@ -61,7 +61,7 @@ green for the wrong reason.
 | `test-pr.sh` | four `gh` calls whatever the file count, previews slice the cache, read-only |
 | `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
 
-## Fourteen bugs these exist to hold shut
+## Sixteen bugs these exist to hold shut
 
 Each was found by review, fixed, and is now covered. Reverting any one of the
 fixes turns this suite red:
@@ -116,10 +116,18 @@ fixes turns this suite red:
 - **The suite deleted the checkout's own `tests/` directory**, and on another
   occasion committed the working tree to the live branch. Both came from a
   `$TMPDIR` that no longer existed: `mktemp` fails silently, the variable is
-  empty, and `rm -rf "$(cd "" && pwd -P)"` resolves to the suite's own cwd while
+  empty, and resolving it through `cd` answers for the suite's own cwd while
   `git -C ""` acts on the repository it is testing. Nothing in `tests/` calls
   `mktemp` directly any more — `mktmpd`, `mktmpf` and `resolve_dir` in `lib.sh`
-  fail loudly instead — and `test-harness.sh` holds it shut.
+  fail loudly instead.
+- **The test that was supposed to hold that shut only held one guard.** It broke
+  `$TMPDIR` from the first call, so every file died at `lib.sh`'s own first
+  `mktemp` and no guard past that line was ever reached: the exact line that
+  deleted `tests/` could be put back and the suite stayed green. The sweep aims
+  the failure at one site at a time now, so the run reaches it.
+- **preen's own state directory was unchecked too.** With an empty
+  `$PREEN_STATE` it wrote `/kind`, `/mode` and `/rev` at the filesystem root and
+  exited 0.
 - **`preen md` on a dash-leading directory found nothing.** `find -weird` read
   the name as options. The root gets a `./`, and the names keep it, because
   glow and `$EDITOR` would read the name as options in turn.
@@ -127,6 +135,31 @@ fixes turns this suite red:
   ` b/x.md`, whose header's last seven bytes are ` b/x.md` and so matched the
   tail slice for `x.md`. An unquoted `a/P b/P` is solved rather than tail-
   matched now; a rename, whose paths differ, still falls back to the tail.
+
+## What holds the harness itself
+
+`tests/test-harness.sh` is the only file here that grades the suite rather than
+preen, and it is in three parts because they hold different things:
+
+- **the shapes, at the source.** No test may build a path with a bare `mktemp`,
+  every `$(new_repo)` and `$(preen_state …)` must carry `|| exit 1`, and nothing
+  may resolve a path with `cd "$x" && pwd`. These are greps. A new unguarded site
+  is a source edit, and this is what refuses it the moment it is written.
+- **the guards, called directly.** `mktmpd`, `mktmpf` and `resolve_dir` must exit
+  rather than hand back an empty string, and say what they could not get.
+- **every site, end to end.** One run per temporary-path site, with `mktemp`
+  failing at that site and nowhere else so the run reaches it, against a
+  throwaway copy of the checkout that is watched for deleted files, staged
+  changes and new commits.
+
+The sweep is keyed on the site NAME, never on a call index: an index moves with
+the environment — a git hook that calls `mktemp` shifts every number after it —
+and it reads raw `mktemp` templates as well as guarded ones, so a site that is
+reverted to a raw call stays under the sweep instead of quietly leaving it.
+
+It is the slow half of the suite: about 40 runs of real fixture work, four at a
+time. `PREEN_HARNESS_JOBS=8 tests/run.sh` widens that if the machine has the
+cores.
 
 ## Writing a new one
 
