@@ -132,7 +132,7 @@ g commit -qm "initial"
 # ---- worktrees -------------------------------------------------------------
 # Each one is what an agent would leave behind: a branch off main with a couple
 # of commits on it. preen worktrees measures them against the merge-base, so
-# they stay stable no matter what lands on main afterwards.
+# they stay stable no matter what lands on main afterward.
 wt() { git worktree add -q -b "$2" "$D/.worktrees/$1" main; }
 
 wt slug-unicode agent/slug-unicode

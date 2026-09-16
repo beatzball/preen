@@ -18,7 +18,7 @@ import { routes, pageModules } from '#litro/page-manifest';
  * at 36px its actual ink is only about a third of the width and it reads as a
  * smudge next to the 24px site name.
  *
- * The template is not parameterised for this, so rather than fork the whole
+ * The template is not parameterized for this, so rather than fork the whole
  * card, take what the default builds and enlarge the one <img> in it. The top
  * row is `alignItems: center`, so a taller box stays centered on the name.
  */

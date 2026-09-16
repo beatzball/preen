@@ -62,8 +62,39 @@ it stays on screen until you press `q`. That matters in a split pane opened
 only to read a file: without a pager the command ends the moment the last line
 is written, and the pane closes with it.
 
-Into a pipe there is no pager, and the bytes are written plain with the color
-kept, so `preen NOTES.md | head` behaves.
+Into a pipe there is no pager, so `preen NOTES.md | head` behaves. The output
+keeps its color codes, which a terminal shows as color and a paste does not —
+see the last bullet below.
+
+### Scrolling, and the one thing it costs
+
+The wheel scrolls the page, because preen adds `--mouse` when your `less`
+knows it (551 and up). While `less` holds the mouse, though, it is `less`
+receiving the clicks rather than the terminal — so **a plain drag no longer
+selects text**.
+
+Three ways around it:
+
+- **In tmux, `prefix + [`.** This is the one to reach for. Copy mode moves and
+  selects from the keyboard, the wheel scrolls the buffer, and — the part that
+  matters in a split — it selects **within the pane**.
+- **Hold the modifier your terminal uses to bypass mouse reporting**, then drag:
+  shift in Ghostty and xterm, **option** in iTerm2. Be aware of what this
+  really does. The modifier takes the mouse away from `less` *and* from tmux,
+  so the **terminal** makes the selection, and a terminal knows nothing about
+  panes. In a split you get a rectangle across the whole screen, with the
+  neighboring pane's text spliced into every line. Fine in a single pane,
+  usually wrong in a split.
+- **Copy the file, not the render**, when what you want is the text rather
+  than a read: `pbcopy < NOTES.md` puts the markdown on the clipboard. Piping
+  the render instead does not work. Out of a terminal preen still writes the
+  color codes, so `preen NOTES.md | pbcopy` pastes them as `[38;2;…m` noise,
+  not as color, and `preen NOTES.md > out.txt` keeps them in the file, which
+  only `less -R out.txt` shows the way it looked.
+
+`less` keeps its own keys throughout: `/` to search, `g` and `G` for the ends,
+`q` to quit.
+
 
 **Any file is treated as markdown here**, whatever its extension. There is no
 check: `preen foo.py` hands the file to glow and you get mangled markdown
