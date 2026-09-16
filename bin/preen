@@ -459,8 +459,33 @@ looks_like_diff() {
 # a terminal gets a pager, a pipe gets the bytes. less is checked rather than
 # assumed: without it "less -R" writes nothing at all, which loses the whole
 # render to save a scrollback the terminal already keeps.
+#
+# --mouse is what makes the wheel work. Without it nothing asks the terminal
+# for wheel events, and because less draws on the alternate screen there is no
+# scrollback to fall back on either -- so scrolling a rendered file did
+# nothing at all, while every picker mode scrolled, because fzf asks for the
+# mouse itself.
+#
+# It is probed, not assumed: less learned --mouse in 549 and macOS shipped an
+# older one for years, and an unknown flag makes less exit -- losing the whole
+# render, which is the failure the paragraph above already guards against.
+#
+# The probe is a case over a command substitution, NOT `less --help | grep -q`.
+# `grep -q` exits at the first match, `less --help` takes SIGPIPE for the rest
+# of its output, and this script runs under `pipefail` -- so the pipeline
+# reports that failure and the flag is dropped. Whether it happens at all
+# depends on which process the kernel schedules first, so the pipeline form
+# answers YES or NO for the same less on the same machine. A command
+# substitution reads to the end and cannot race.
+#
+# The cost is worth stating: with --mouse a drag selects inside less rather
+# than in the terminal, so copying text needs shift held down.
 pager() {
-  if [ -t 1 ] && command -v less >/dev/null; then less -R; else cat; fi
+  [ -t 1 ] && command -v less >/dev/null || { cat; return; }
+  case "$(less --help 2>/dev/null)" in
+    *--mouse*) less -R --mouse --wheel-lines=3 ;;
+    *)         less -R ;;
+  esac
 }
 
 # PREEN_BUF and PREEN_BUFDIR are global on purpose: the EXIT trap runs after the

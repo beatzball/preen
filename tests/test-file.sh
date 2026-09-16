@@ -29,8 +29,17 @@ eval "f=\${$#}"
 printf 'RENDERED %s\n' "$(basename "$f")"
 EOF
 
+# This shim answers --help as well as recording its arguments, because pager()
+# asks less whether it knows --mouse before passing it. $LESS_HAS_MOUSE picks
+# which less this pretends to be.
 cat > "$shim/less" <<EOF
 #!/bin/sh
+case "\$1" in
+  --help)
+    printf '  --quit-at-eof\\n'
+    [ "\${LESS_HAS_MOUSE:-1}" = 1 ] && printf '  --mouse\\n  --wheel-lines=[_N]\\n'
+    exit 0 ;;
+esac
 printf 'less %s' "\$*" > "$mark"
 cat
 EOF
@@ -44,6 +53,22 @@ out="$(PATH="$shim:$PATH"; export PATH; with_tty "$PREEN" "$doc" | tr -d '\r')"
 assert_contains "$out" "RENDERED note.md" "a named file is rendered by glow"
 assert_contains "$(cat "$mark" 2>/dev/null || echo none)" "less -R" \
   "on a terminal the render is held open by less -R"
+
+# ---- the wheel ---------------------------------------------------------------
+# Without --mouse nothing asks the terminal for wheel events, and less draws on
+# the alternate screen, so there is no scrollback to fall back on: the wheel did
+# nothing at all while every fzf mode scrolled. The flag is probed rather than
+# assumed, so both answers have to be held.
+assert_contains "$(cat "$mark" 2>/dev/null || echo none)" "--mouse" \
+  "a less that knows --mouse is given it, so the wheel scrolls"
+
+rm -f "$mark"
+out="$(PATH="$shim:$PATH"; export PATH; LESS_HAS_MOUSE=0 with_tty "$PREEN" "$doc" | tr -d '\r')"
+assert_contains "$out" "RENDERED note.md" "an older less still gets the render"
+assert_not_contains "$(cat "$mark" 2>/dev/null || echo none)" "--mouse" \
+  "a less that does not know --mouse is not handed it"
+assert_contains "$(cat "$mark" 2>/dev/null || echo none)" "less -R" \
+  "and is still run as less -R"
 
 # ---- into a pipe -------------------------------------------------------------
 # No pager here, or `preen FILE.md | head` would hang on a full-screen program.
