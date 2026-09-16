@@ -460,19 +460,22 @@ looks_like_diff() {
 # assumed: without it "less -R" writes nothing at all, which loses the whole
 # render to save a scrollback the terminal already keeps.
 #
-# --mouse is what makes the wheel work *inside tmux*. A terminal on its own
-# already handles this: Ghostty, xterm, iTerm2 and kitty default to
-# alternate-scroll (DEC mode 1007) and turn a wheel notch into arrow keys when
-# no application has asked for the mouse, so bare `less -R` scrolls there. tmux
-# with `mouse on` takes the event first and has nothing to send it to, and less
-# draws on the alternate screen so there is no scrollback to fall back on --
-# which is why a rendered file would not scroll while every picker mode did.
-# fzf asks for the mouse itself.
+# --mouse is what makes the wheel work. Some terminals handle it without any
+# help -- one with alternate-scroll (DEC mode 1007) on turns a wheel notch into
+# arrow keys while no application has asked for the mouse, and Ghostty defaults
+# to that -- but it is not something to rely on: xterm defaults
+# alternateScroll to false, and iTerm2 ships alternateMouseScroll off. And
+# under tmux with `mouse on` it never applies, because tmux takes the event
+# first and has nothing to hand it to. less draws on the alternate screen, so
+# there is no scrollback to fall back on either, which is why a rendered file
+# would not scroll while every picker mode did: fzf asks for the mouse itself.
 #
-# It is probed, not assumed: less learned --mouse in 549 and macOS shipped an
-# older one for years. An unknown flag does not kill less -- it prints "There
-# is no --mouse option", and from 572 waits for RETURN before showing the page.
-# That is not a lost render, it is a prompt in front of every single one, which
+# It is probed, not assumed: --mouse went into less in 540, reached the help
+# text in 548, and first shipped in a release in 551 -- and macOS shipped an
+# older one for years. An unknown flag does not kill less: it prints
+# `There is no mouse option ("less --help" for help)` -- no dashes, that form
+# is only for the interactive `--` command -- and carries on. From 572 it waits
+# for RETURN first, which would put a prompt in front of every render, and that
 # is reason enough not to send the flag blind.
 #
 # The probe is a case over a command substitution, NOT `less --help | grep -q`.
@@ -488,8 +491,12 @@ looks_like_diff() {
 # a second time and the pager would scroll three times faster than the fzf
 # preview beside it.
 #
-# The cost is worth stating: with --mouse a drag selects inside less rather
-# than in the terminal, so copying text needs shift held down.
+# The cost is worth stating, precisely. less has no text selection of its own
+# and asks only for mode 1000, which reports clicks and never drag motion -- so
+# while it holds the mouse a plain drag selects nothing at all in a bare
+# terminal, and shift is how you select and copy. Under tmux nothing about the
+# drag changes. A left click sets a mark, a right click jumps back, and a click
+# on an OSC 8 link opens a less prompt.
 pager() {
   [ -t 1 ] && command -v less >/dev/null || { cat; return; }
   case "$(less --help 2>/dev/null)" in

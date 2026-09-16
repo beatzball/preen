@@ -149,11 +149,11 @@ It picks the renderer by sniffing the content: `diff --git`, `--- ` / `+++ ` or
 escapes first, so `git diff --color=always | preen` is still read as a diff.
 
 On a terminal the output is paged through `less -R`, with `--mouse` added when
-your `less` is new enough to know it (549 and up), so the wheel scrolls the
-page. That is worth one warning: while `less` is holding the mouse, dragging
-selects inside `less` rather than in the terminal, so copying text needs shift
-held down. Into a pipe or a file the output is written plain, color and all,
-with no pager at all. `PREEN_LAYOUT=inline` applies here too.
+your `less` is new enough to know it (551 and up), so the wheel scrolls the
+page. That is worth one warning: while `less` holds the mouse a plain drag
+selects nothing, so hold shift to select and copy. Into a pipe or a file the
+output is written plain, color and all, with no pager at all.
+`PREEN_LAYOUT=inline` applies here too.
 
 ### Git integration
 

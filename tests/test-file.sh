@@ -45,6 +45,10 @@ cat > "$shim/less" <<EOF
 #!/bin/sh
 case "\$1" in
   --help)
+    # 16KB of other flags BEFORE --mouse, because real less 668 has it at byte
+    # 12231. A shim that names it at byte 0 lets a probe that reads only the
+    # first few KB pass here and drop the wheel on every real less.
+    head -c 16384 "$shim/bighelp"
     [ "\${LESS_HAS_MOUSE:-1}" = 1 ] && printf '  --mouse\\n'
     # Then keep writing, past anything a pipe will hold, and \`exec\` so the
     # signal lands on THIS process: a shim that ends in \`exit 0\` swallows the
@@ -79,9 +83,9 @@ assert_eq "$(cat "$mark" 2>/dev/null || echo none)" "less -R --mouse" \
 rm -f "$mark"
 out="$(PATH="$shim:$PATH"; export PATH; LESS_HAS_MOUSE=0 with_tty "$PREEN" "$doc" | tr -d '\r')"
 assert_contains "$out" "RENDERED note.md" "an older less still gets the render"
-# The exact arguments, not a substring of them: `assert_not_contains --mouse`
-# alone passed even when the old less was handed the flag, because the render
-# arrived either way.
+# The exact arguments, not a substring of them: `assert_contains --mouse` was
+# blind to --wheel-lines creeping back, and an exact match says in one line
+# what the pager is expected to run.
 assert_eq "$(cat "$mark" 2>/dev/null || echo none)" "less -R" \
   "a less that does not know --mouse is run as exactly: less -R"
 
