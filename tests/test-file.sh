@@ -29,11 +29,44 @@ eval "f=\${$#}"
 printf 'RENDERED %s\n' "$(basename "$f")"
 EOF
 
+# This shim answers --help as well as recording its arguments, because pager()
+# asks less whether it knows --mouse before passing it. $LESS_HAS_MOUSE picks
+# which less this pretends to be.
+#
+# The shim writes a megabyte from the same process AFTER naming --mouse. That
+# is what makes the probe's *shape* testable rather than only its answer: `less --help | grep -q` stops reading at the match, the rest of the
+# write takes SIGPIPE, and under the `pipefail` bin/preen sets, the pipeline
+# reports that failure and the flag is silently dropped. Real less races the
+# same way -- its help is 16KB, far under a pipe buffer, because the race needs
+# one write to land after grep has gone, not a full buffer. A shim that names
+# --mouse last cannot race, and a suite built on one is blind to the bug.
 cat > "$shim/less" <<EOF
 #!/bin/sh
+case "\$1" in
+  --help)
+    # 16KB of other flags BEFORE --mouse. Real less 668 has it about 12KB into
+    # a 16KB help, and a shim that names it at byte 0 lets a probe that reads
+    # only the first few KB pass here while dropping the wheel on every real
+    # less. Deeper than the real thing on purpose: a probe that truncates
+    # anywhere under 16KB fails here, which is stricter than today's less
+    # needs and stays right as its help grows.
+    #
+    # By lines, not bytes. `head -c` cuts mid-line, so --mouse arrived glued to
+    # half of one -- and a *correct* probe anchored on a whole line would then
+    # fail here for a reason that has nothing to do with the code.
+    head -n 800 "$shim/bighelp"
+    [ "\${LESS_HAS_MOUSE:-1}" = 1 ] && printf '  --mouse\\n'
+    # Then keep writing, past anything a pipe will hold, and \`exec\` so the
+    # signal lands on THIS process: a shim that ends in \`exit 0\` swallows the
+    # SIGPIPE and the race disappears, which is the whole thing being tested.
+    exec cat "$shim/bighelp" ;;
+esac
 printf 'less %s' "\$*" > "$mark"
 cat
 EOF
+
+# The rest of that --help output, bigger than a pipe buffer.
+yes '  --some-other-flag' | head -c 1048576 > "$shim/bighelp"
 
 chmod +x "$shim/glow" "$shim/less"
 
@@ -44,6 +77,23 @@ out="$(PATH="$shim:$PATH"; export PATH; with_tty "$PREEN" "$doc" | tr -d '\r')"
 assert_contains "$out" "RENDERED note.md" "a named file is rendered by glow"
 assert_contains "$(cat "$mark" 2>/dev/null || echo none)" "less -R" \
   "on a terminal the render is held open by less -R"
+
+# ---- the wheel ---------------------------------------------------------------
+# Without --mouse nothing asks the terminal for wheel events, and less draws on
+# the alternate screen, so there is no scrollback to fall back on: the wheel did
+# nothing at all while every fzf mode scrolled. The flag is probed rather than
+# assumed, so both answers have to be held.
+assert_eq "$(cat "$mark" 2>/dev/null || echo none)" "less -R --mouse" \
+  "a less that knows --mouse is run as exactly: less -R --mouse"
+
+rm -f "$mark"
+out="$(PATH="$shim:$PATH"; export PATH; LESS_HAS_MOUSE=0 with_tty "$PREEN" "$doc" | tr -d '\r')"
+assert_contains "$out" "RENDERED note.md" "an older less still gets the render"
+# The exact arguments, not a substring of them: `assert_contains --mouse` was
+# blind to --wheel-lines creeping back, and an exact match says in one line
+# what the pager is expected to run.
+assert_eq "$(cat "$mark" 2>/dev/null || echo none)" "less -R" \
+  "a less that does not know --mouse is run as exactly: less -R"
 
 # ---- into a pipe -------------------------------------------------------------
 # No pager here, or `preen FILE.md | head` would hang on a full-screen program.

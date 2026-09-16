@@ -459,8 +459,52 @@ looks_like_diff() {
 # a terminal gets a pager, a pipe gets the bytes. less is checked rather than
 # assumed: without it "less -R" writes nothing at all, which loses the whole
 # render to save a scrollback the terminal already keeps.
+#
+# --mouse is what makes the wheel work. Some terminals handle it without any
+# help -- one with alternate-scroll (DEC mode 1007) on turns a wheel notch into
+# arrow keys while no application has asked for the mouse, and Ghostty defaults
+# to that -- but it is not something to rely on: xterm defaults
+# alternateScroll to false, and iTerm2 ships alternateMouseScroll off. And
+# under tmux with `mouse on` it never applies, because tmux takes the event
+# first and has nothing to hand it to. less draws on the alternate screen, so
+# there is no scrollback to fall back on either, which is why a rendered file
+# would not scroll while every picker mode did: fzf asks for the mouse itself.
+#
+# It is probed, not assumed: --mouse went into less in 540, reached the help
+# text in 546, and first shipped in a release in 551 -- and macOS shipped an
+# older one for years. An unknown flag does not kill less: it prints
+# `There is no mouse option ("less --help" for help)` -- no dashes, that form
+# is only for the interactive `--` command -- and carries on. From 572 it waits
+# for RETURN first, which would put a prompt in front of every render, and that
+# is reason enough not to send the flag blind.
+#
+# The probe is a case over a command substitution, NOT `less --help | grep -q`.
+# `grep -q` exits at the first match, the rest of less's output takes SIGPIPE,
+# and this script runs under `pipefail` -- so the pipeline reports that failure
+# and the flag is dropped. It needs only one write to land after grep has gone,
+# not a full pipe buffer, so the same less on the same machine answers yes or
+# no depending on scheduling. A command substitution reads to the end and
+# cannot race.
+#
+# No --wheel-lines. A terminal reporting the mouse sends one event per row
+# already -- three per notch, in a default Ghostty -- so setting it multiplies
+# a second time and the pager would scroll three times faster than the fzf
+# preview beside it.
+#
+# The cost is worth stating, precisely. less has no text selection of its own.
+# It asks for modes 1000 and 1006, and from 678 for 1002 as well -- so while it
+# holds the mouse, a plain drag either does nothing (668 and earlier) or
+# scrolls the file (678 and later). Either way it does not select. To select
+# and copy, hold whichever modifier your terminal uses to bypass mouse
+# reporting: shift in xterm, option in iTerm2. Under tmux the drag is unchanged
+# either way, because tmux already forwarded it. A left click sets a mark, a
+# right click jumps back, and a click on an OSC 8 link opens a less prompt.
 pager() {
-  if [ -t 1 ] && command -v less >/dev/null; then less -R; else cat; fi
+  [ -t 1 ] && command -v less >/dev/null || { cat; return; }
+  case "$(less --help 2>/dev/null)" in
+    *--mouse*) less -R --mouse ;;
+    *)         less -R ;;
+  esac
 }
 
 # PREEN_BUF and PREEN_BUFDIR are global on purpose: the EXIT trap runs after the
