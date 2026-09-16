@@ -65,6 +65,29 @@ is written, and the pane closes with it.
 Into a pipe there is no pager, and the bytes are written plain with the color
 kept, so `preen NOTES.md | head` behaves.
 
+### Scrolling, and the one thing it costs
+
+The wheel scrolls the page, because preen adds `--mouse` when your `less`
+knows it (551 and up). While `less` holds the mouse, though, it is `less`
+receiving the clicks rather than the terminal — so **a plain drag no longer
+selects text**.
+
+Three ways round it, in order of how likely you are to reach for them:
+
+- **Hold the modifier your terminal uses to bypass mouse reporting**, then drag
+  as usual. Shift in Ghostty and xterm; **option** in iTerm2.
+- **In tmux, `prefix + [`** puts you in copy mode, where the keyboard moves
+  around the page and selects, and the wheel scrolls the buffer. This is the
+  comfortable one for anything longer than a screen.
+- **Skip the pager entirely** when what you want is the text rather than a
+  read: `preen NOTES.md > out.md` writes it plain, color and all, and
+  `preen NOTES.md | pbcopy` puts it straight on the clipboard. Into anything
+  that is not a terminal there is no pager and no mouse.
+
+`less` keeps its own keys throughout: `/` to search, `g` and `G` for the ends,
+`q` to quit.
+
+
 **Any file is treated as markdown here**, whatever its extension. There is no
 check: `preen foo.py` hands the file to glow and you get mangled markdown
 rather than an error. To render a single **diff**, pipe it in instead — see

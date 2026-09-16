@@ -50,8 +50,11 @@ git diff --color=always | preen
 
 `preen` looks at where its own output is going:
 
-- **To a terminal** — the result is paged through `less -R`. Scroll, search
-  with `/`, quit with `q`.
+- **To a terminal** — the result is paged through `less -R`, with `--mouse`
+  when your `less` knows it, so the wheel scrolls. Search with `/`, quit with
+  `q`. While `less` holds the mouse a plain drag stops selecting text — hold
+  shift (option in iTerm2), or use `prefix + [` under tmux. The same trade as
+  in [browsing](/docs/browsing).
 - **To a pipe or a file** — the bytes are written plain, color and all.
 
 That second case is deliberate. `git diff | preen > out.txt` keeps the color
