@@ -153,8 +153,9 @@ your `less` is new enough to know it (551 and up), so the wheel scrolls the
 page. That is worth one warning: while `less` holds the mouse a plain drag no
 longer selects text — to select and copy, hold whichever modifier your terminal
 uses to bypass mouse reporting, which is shift in Ghostty and xterm and option
-in iTerm2. Under tmux, `prefix + [` is the other way in: copy mode moves and
-selects from the keyboard. Into a pipe or a file the
+in iTerm2. Under tmux, prefer `prefix + [`: that modifier takes the mouse from
+tmux as well, so the terminal selects across the whole screen and splices in
+whatever is in the pane beside it, while copy mode selects within the pane. Into a pipe or a file the
 output is written plain, color and all, with no pager at all.
 `PREEN_LAYOUT=inline` applies here too.
 

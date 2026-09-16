@@ -72,13 +72,18 @@ knows it (551 and up). While `less` holds the mouse, though, it is `less`
 receiving the clicks rather than the terminal — so **a plain drag no longer
 selects text**.
 
-Three ways round it, in order of how likely you are to reach for them:
+Three ways round it:
 
-- **Hold the modifier your terminal uses to bypass mouse reporting**, then drag
-  as usual. Shift in Ghostty and xterm; **option** in iTerm2.
-- **In tmux, `prefix + [`** puts you in copy mode, where the keyboard moves
-  around the page and selects, and the wheel scrolls the buffer. This is the
-  comfortable one for anything longer than a screen.
+- **In tmux, `prefix + [`.** This is the one to reach for. Copy mode moves and
+  selects from the keyboard, the wheel scrolls the buffer, and — the part that
+  matters in a split — it selects **within the pane**.
+- **Hold the modifier your terminal uses to bypass mouse reporting**, then drag:
+  shift in Ghostty and xterm, **option** in iTerm2. Be aware of what this
+  really does. The modifier takes the mouse away from `less` *and* from tmux,
+  so the **terminal** makes the selection, and a terminal knows nothing about
+  panes. In a split you get a rectangle across the whole screen, with the
+  neighbouring pane's text spliced into every line. Fine in a single pane,
+  usually wrong in a split.
 - **Skip the pager entirely** when what you want is the text rather than a
   read: `preen NOTES.md > out.md` writes it plain, color and all, and
   `preen NOTES.md | pbcopy` puts it straight on the clipboard. Into anything
