@@ -111,7 +111,7 @@ assert_contains "$out" "RENDERED note.md" "into a pipe the render still arrives"
 # up as an empty render rather than a silent pass.
 bare="$shim/bare"; mkdir -p "$bare"
 ln -s "$shim/glow" "$bare/glow"
-for b in bash tput cat sed dirname basename; do
+for b in bash stty cat sed dirname basename; do
   p="$(command -v "$b")" && ln -s "$p" "$bare/$b"
 done
 rm -f "$mark"
@@ -128,7 +128,7 @@ assert_contains "$out" "RENDERED note.md" "with no less installed the render sti
 # supports, so that shortcut passes on this machine and fails on a contributor's.
 noglow="$shim/noglow"; mkdir -p "$noglow"
 ln -s "$shim/less" "$noglow/less"
-for b in bash tput cat sed dirname basename; do
+for b in bash stty cat sed dirname basename; do
   p="$(command -v "$b")" && ln -s "$p" "$noglow/$b"
 done
 out="$(with_tty env PATH="$noglow" "$PREEN" "$doc" | tr -d '\r')"
