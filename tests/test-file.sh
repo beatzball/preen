@@ -33,9 +33,8 @@ EOF
 # asks less whether it knows --mouse before passing it. $LESS_HAS_MOUSE picks
 # which less this pretends to be.
 #
-# --mouse is named FIRST and the shim then writes a megabyte from the same
-# process. That is what makes the probe's *shape* testable rather than only its
-# answer: `less --help | grep -q` stops reading at the match, the rest of the
+# The shim writes a megabyte from the same process AFTER naming --mouse. That
+# is what makes the probe's *shape* testable rather than only its answer: `less --help | grep -q` stops reading at the match, the rest of the
 # write takes SIGPIPE, and under the `pipefail` bin/preen sets, the pipeline
 # reports that failure and the flag is silently dropped. Real less races the
 # same way -- its help is 16KB, far under a pipe buffer, because the race needs
@@ -45,10 +44,17 @@ cat > "$shim/less" <<EOF
 #!/bin/sh
 case "\$1" in
   --help)
-    # 16KB of other flags BEFORE --mouse, because real less 668 has it at byte
-    # 12231. A shim that names it at byte 0 lets a probe that reads only the
-    # first few KB pass here and drop the wheel on every real less.
-    head -c 16384 "$shim/bighelp"
+    # 16KB of other flags BEFORE --mouse. Real less 668 has it about 12KB into
+    # a 16KB help, and a shim that names it at byte 0 lets a probe that reads
+    # only the first few KB pass here while dropping the wheel on every real
+    # less. Deeper than the real thing on purpose: a probe that truncates
+    # anywhere under 16KB fails here, which is stricter than today's less
+    # needs and stays right as its help grows.
+    #
+    # By lines, not bytes. `head -c` cuts mid-line, so --mouse arrived glued to
+    # half of one -- and a *correct* probe anchored on a whole line would then
+    # fail here for a reason that has nothing to do with the code.
+    head -n 800 "$shim/bighelp"
     [ "\${LESS_HAS_MOUSE:-1}" = 1 ] && printf '  --mouse\\n'
     # Then keep writing, past anything a pipe will hold, and \`exec\` so the
     # signal lands on THIS process: a shim that ends in \`exit 0\` swallows the

@@ -150,8 +150,9 @@ escapes first, so `git diff --color=always | preen` is still read as a diff.
 
 On a terminal the output is paged through `less -R`, with `--mouse` added when
 your `less` is new enough to know it (551 and up), so the wheel scrolls the
-page. That is worth one warning: while `less` holds the mouse a plain drag
-selects nothing, so hold shift to select and copy. Into a pipe or a file the
+page. That is worth one warning: while `less` holds the mouse a plain drag no
+longer selects text — to select and copy, hold whichever modifier your terminal
+uses to bypass mouse reporting, which is shift in xterm and option in iTerm2. Into a pipe or a file the
 output is written plain, color and all, with no pager at all.
 `PREEN_LAYOUT=inline` applies here too.
 

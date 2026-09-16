@@ -471,7 +471,7 @@ looks_like_diff() {
 # would not scroll while every picker mode did: fzf asks for the mouse itself.
 #
 # It is probed, not assumed: --mouse went into less in 540, reached the help
-# text in 548, and first shipped in a release in 551 -- and macOS shipped an
+# text in 546, and first shipped in a release in 551 -- and macOS shipped an
 # older one for years. An unknown flag does not kill less: it prints
 # `There is no mouse option ("less --help" for help)` -- no dashes, that form
 # is only for the interactive `--` command -- and carries on. From 572 it waits
@@ -491,12 +491,14 @@ looks_like_diff() {
 # a second time and the pager would scroll three times faster than the fzf
 # preview beside it.
 #
-# The cost is worth stating, precisely. less has no text selection of its own
-# and asks only for mode 1000, which reports clicks and never drag motion -- so
-# while it holds the mouse a plain drag selects nothing at all in a bare
-# terminal, and shift is how you select and copy. Under tmux nothing about the
-# drag changes. A left click sets a mark, a right click jumps back, and a click
-# on an OSC 8 link opens a less prompt.
+# The cost is worth stating, precisely. less has no text selection of its own.
+# It asks for modes 1000 and 1006, and from 678 for 1002 as well -- so while it
+# holds the mouse, a plain drag either does nothing (668 and earlier) or
+# scrolls the file (678 and later). Either way it does not select. To select
+# and copy, hold whichever modifier your terminal uses to bypass mouse
+# reporting: shift in xterm, option in iTerm2. Under tmux the drag is unchanged
+# either way, because tmux already forwarded it. A left click sets a mark, a
+# right click jumps back, and a click on an OSC 8 link opens a less prompt.
 pager() {
   [ -t 1 ] && command -v less >/dev/null || { cat; return; }
   case "$(less --help 2>/dev/null)" in
