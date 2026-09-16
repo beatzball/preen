@@ -62,8 +62,9 @@ it stays on screen until you press `q`. That matters in a split pane opened
 only to read a file: without a pager the command ends the moment the last line
 is written, and the pane closes with it.
 
-Into a pipe there is no pager, and the bytes are written plain with the color
-kept, so `preen NOTES.md | head` behaves.
+Into a pipe there is no pager, so `preen NOTES.md | head` behaves. The output
+keeps its color codes, which a terminal shows as color and a paste does not —
+see the last bullet below.
 
 ### Scrolling, and the one thing it costs
 

@@ -155,8 +155,10 @@ longer selects text — to select and copy, hold whichever modifier your termina
 uses to bypass mouse reporting, which is shift in Ghostty and xterm and option
 in iTerm2. Under tmux, prefer `prefix + [`: that modifier takes the mouse from
 tmux as well, so the terminal selects across the whole screen and splices in
-whatever is in the pane beside it, while copy mode selects within the pane. Into a pipe or a file the
-output is written plain, color and all, with no pager at all.
+whatever is in the pane beside it, while copy mode selects within the pane.
+Into a pipe or a file there is no pager, and the output keeps its color codes:
+`less -R out.txt` shows them as color, but a paste shows them as text. To copy
+a file's text, copy the file itself: `pbcopy < NOTES.md`.
 `PREEN_LAYOUT=inline` applies here too.
 
 ### Git integration
