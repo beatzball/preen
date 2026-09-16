@@ -13,7 +13,7 @@ import litroContentPlugin from '@beatzball/litro/vite';
  * loaded gun, because the emitted chunk keeps a real import.
  *
  * For src/image-size.ts it is worse than waste: it reads node:fs, which Vite
- * externalises for the browser with a warning rather than an error. The build
+ * externalizes for the browser with a warning rather than an error. The build
  * still passes and the doc page renders blank.
  *
  * This config drives ONLY the client bundle (input app.ts, outDir

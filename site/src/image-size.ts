@@ -3,7 +3,7 @@
  *
  * **Server only.** It reaches for node:fs and node:path, so importing it from
  * the top of a page module puts those in the client bundle too — Vite then
- * externalises them with a warning rather than an error, the build still
+ * externalizes them with a warning rather than an error, the build still
  * passes, and the doc page renders blank in the browser. Reach it with an
  * `await import()` from inside a pageData fetcher, the same way
  * src/highlight.ts is reached, and let the stub in vite.config.ts keep it out

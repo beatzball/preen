@@ -205,7 +205,7 @@ export const pageData = definePageData(async (event) => {
   // nothing errors.
   const { applyHighlighting } = await import('../../src/highlight.js');
   // src/image-size.ts reads node:fs. Imported at the top of this file those
-  // builtins land in the CLIENT bundle, where Vite externalises them with a
+  // builtins land in the CLIENT bundle, where Vite externalizes them with a
   // warning rather than an error — the build passes and the doc page renders
   // blank in the browser. Same dynamic-import treatment as highlighting.
   const { imageSize } = await import('../../src/image-size.js');
