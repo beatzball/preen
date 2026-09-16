@@ -260,9 +260,11 @@ belongs between `Hide` and `Show`, so no real path reaches a frame. And
 `Screenshot` wants a path relative to the repo root plus a `Sleep` after it, or
 vhs writes nothing at all.
 
-`preen-pipes.tape` records a narrower frame than the rest on purpose: piped
-output is rendered 80 columns wide, so a wider one would only be empty on the
-right.
+`preen-pipes.tape` records a narrower frame than the rest. When it was
+recorded, piped output was always rendered 80 columns wide, so a wider frame
+would only have been empty on the right. Piped output now takes the terminal's
+width like everything else, so the frame could match the others the next time
+the tape is re-recorded.
 
 ## Notes
 
