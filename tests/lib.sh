@@ -407,10 +407,18 @@ with_tty() {
   # with_tty <cmd> [args...] -> what the command wrote to a terminal, stdout
   # and stderr together, exactly as a person at a terminal would see them.
   # Exits 124 if the command outlived PREEN_TTY_TIMEOUT seconds.
+  #
+  # A fresh pty has no size at all -- `stty size` on it says `0 0` -- so a
+  # test about width sets PREEN_TTY_COLS and the terminal is that many columns
+  # wide, the way a tmux pane is. Left unset, the pty stays sizeless, which is
+  # what every other test here has always run against.
   python3 - "$@" <<'PY'
-import os, pty, select, subprocess, sys, time
+import fcntl, os, pty, select, struct, subprocess, sys, termios, time
 deadline = time.monotonic() + float(os.environ.get("PREEN_TTY_TIMEOUT", "30"))
 master, slave = pty.openpty()
+cols = int(os.environ.get("PREEN_TTY_COLS", "0") or 0)
+if cols > 0:
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, cols, 0, 0))
 p = subprocess.Popen(sys.argv[1:], stdin=subprocess.DEVNULL,
                      stdout=slave, stderr=slave)
 os.close(slave)

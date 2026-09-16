@@ -10,13 +10,54 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 die() { printf 'preen: %s\n' "$*" >&2; exit 1; }
 glow_major() { glow --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p'; }
 
+# ---- how wide to render ------------------------------------------------------
+# Every render outside fzf used to ask `$(tput cols)`. Inside `$( )` tput's
+# stdout is the capture pipe, and what it does then depends on the ncurses it
+# was built from: 6.1 and later try stderr and then stdin, macOS's 6.0 tries
+# stderr only, and older ones try nothing. Whichever fd it settles on, a
+# `2>/dev/null` on the call takes it away, and the answer is terminfo's 80 --
+# in every pane, at every size. `cat FILE.md | preen` rendered at 80 in a
+# 66-column pane, and less then folded every line a second time.
+#
+# So this asks the terminal itself, on whichever fd is one. stdout first: the
+# render goes there, and it is what pager() checks. That cannot be asked from
+# inside `$( )`, where stdout is the pipe, so the fd is copied onto 3 outside
+# the substitution and stty reads it there -- and the result is set in WIDTH
+# rather than printed, because `$(term_width)` would put stdout back on a
+# pipe. `stty size` prints `rows cols` on both the BSD and the GNU one. A pty
+# that has not been given a size says `0 0`, and is refused like any other
+# answer that is not a positive count; with no terminal on any fd the width
+# is 80, as before.
+#
+# COLUMNS still wins, when it is a positive count: ncurses honored it before,
+# and it is the one knob for a narrower render on a wide screen.
+term_width() {
+  local fd size
+  WIDTH="${COLUMNS:-}"
+  case "$WIDTH" in *[!0-9]*) WIDTH="" ;; esac
+  if [ "${WIDTH:-0}" -le 0 ]; then
+    WIDTH=""
+    for fd in 1 2 0; do
+      [ -t "$fd" ] || continue
+      { size="$(stty size <&3 2>/dev/null)"; } 3<&"$fd" || continue
+      WIDTH="${size##* }"
+      case "$WIDTH" in ''|*[!0-9]*) WIDTH="" ;; esac
+      [ "${WIDTH:-0}" -gt 0 ] && break
+      WIDTH=""
+    done
+  fi
+  [ -n "$WIDTH" ] || WIDTH=80
+}
+
 # ---- render one file, no fzf -------------------------------------------------
 # glow 3 keeps its colors when stdout is a pipe, which is what fzf hands a
 # preview. glow 2 silently drops them, so install.sh requires 3.0.0 or newer.
 # stdin must be /dev/null: glow reads the file by name, but still blocks on an
 # open stdin, which leaves a preview hanging on "Loading ...".
 render_md() {
-  glow -s "$GLOW_STYLE" -w "${1:-$(tput cols 2>/dev/null || echo 80)}" "$2" </dev/null
+  local w="$1"
+  [ -n "$w" ] || { term_width; w="$WIDTH"; }
+  glow -s "$GLOW_STYLE" -w "$w" "$2" </dev/null
 }
 
 # git, optionally inside another worktree. An empty dir means "right here", so
@@ -511,7 +552,6 @@ pager() {
 # function has returned, so a "local" would already be out of scope and set -u
 # would trip.
 render_stdin() {
-  local width
   # the buffer has to end in .md: glow 3 renders a file with any other
   # extension as plain text, so stdin markdown came out unstyled
   PREEN_BUFDIR="$(mktemp -d "${TMPDIR:-/tmp}/preen-stdin.XXXXXX")"
@@ -519,13 +559,13 @@ render_stdin() {
   trap 'rm -rf "$PREEN_BUFDIR"' EXIT
   cat > "$PREEN_BUF"
   [ -s "$PREEN_BUF" ] || die "nothing on stdin"
-  width="$(tput cols 2>/dev/null || echo 80)"
+  term_width
   if looks_like_diff "$PREEN_BUF"; then
     command -v delta >/dev/null || die "delta is not installed"
-    delta_pipe "$(layout_mode)" "$width" < "$PREEN_BUF" | pager
+    delta_pipe "$(layout_mode)" "$WIDTH" < "$PREEN_BUF" | pager
   else
     need_glow
-    render_md "$width" "$PREEN_BUF" | pager
+    render_md "$WIDTH" "$PREEN_BUF" | pager
   fi
 }
 
@@ -551,7 +591,7 @@ case "${1:-}" in
     fi
     exit 0 ;;
   --show)
-    f="$2"; w="$(tput cols)"
+    f="$2"; term_width; w="$WIDTH"
     kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
     if [ "$kind" = md ]; then
       render_md "$w" "$f" | pager
@@ -634,7 +674,7 @@ H
     # line is written, which closes a tmux pane opened just to read the file.
     # pager() still writes plain bytes when stdout is not a terminal, so
     # "preen FILE.md | head" is unchanged.
-    render_md "$(tput cols)" "$1" | pager; exit 0 ;;
+    term_width; render_md "$WIDTH" "$1" | pager; exit 0 ;;
 esac
 
 if [ -z "$KIND" ]; then

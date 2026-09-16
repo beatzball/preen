@@ -11,7 +11,9 @@ the version check preen makes at startup and CI never installs it.
 
 `python3` is for two things. `with_tty` allocates a pty so the tests can reach
 the code preen runs on a terminal — `pager()` branches on `[ -t 1 ]`, and a test
-harness only ever offers a pipe, so there is no other way in. `list_has` and its
+harness only ever offers a pipe, so there is no other way in. A fresh pty has no
+size, so a test about width sets `PREEN_TTY_COLS` and gets a terminal that many
+columns wide. `list_has` and its
 neighbors read the file list, which is NUL-delimited and holds a name with a
 newline in it: the pair of bytes no line-oriented tool can handle at once.
 
@@ -60,6 +62,7 @@ green for the wrong reason.
 | `test-filenames.sh` | accented names, spaces, a leading dash, and the quote, backslash, tab and newline cases from #3 — in diff, md, pr and both levels of worktrees, plus a tab in a worktree's own directory name, a dash-leading directory in md mode, a PR file named ` b/x.md`, the `--read0` fzf is given and the `ctrl-e` binding a worktree path is spent through |
 | `test-pr.sh` | four `gh` calls whatever the file count, previews slice the cache, read-only |
 | `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
+| `test-width.sh` | the `-w` every render outside fzf asks glow for: the terminal's own width on a 66- and a 132-column pty, for a named file, the enter key and piped input; `COLUMNS` still winning; 80 with no terminal on any fd |
 
 ## Seventeen bugs these exist to hold shut
 
