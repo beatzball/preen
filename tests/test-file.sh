@@ -32,17 +32,31 @@ EOF
 # This shim answers --help as well as recording its arguments, because pager()
 # asks less whether it knows --mouse before passing it. $LESS_HAS_MOUSE picks
 # which less this pretends to be.
+#
+# --mouse is named FIRST and the shim then writes a megabyte from the same
+# process. That is what makes the probe's *shape* testable rather than only its
+# answer: `less --help | grep -q` stops reading at the match, the rest of the
+# write takes SIGPIPE, and under the `pipefail` bin/preen sets, the pipeline
+# reports that failure and the flag is silently dropped. Real less races the
+# same way -- its help is 16KB, far under a pipe buffer, because the race needs
+# one write to land after grep has gone, not a full buffer. A shim that names
+# --mouse last cannot race, and a suite built on one is blind to the bug.
 cat > "$shim/less" <<EOF
 #!/bin/sh
 case "\$1" in
   --help)
-    printf '  --quit-at-eof\\n'
-    [ "\${LESS_HAS_MOUSE:-1}" = 1 ] && printf '  --mouse\\n  --wheel-lines=[_N]\\n'
-    exit 0 ;;
+    [ "\${LESS_HAS_MOUSE:-1}" = 1 ] && printf '  --mouse\\n'
+    # Then keep writing, past anything a pipe will hold, and \`exec\` so the
+    # signal lands on THIS process: a shim that ends in \`exit 0\` swallows the
+    # SIGPIPE and the race disappears, which is the whole thing being tested.
+    exec cat "$shim/bighelp" ;;
 esac
 printf 'less %s' "\$*" > "$mark"
 cat
 EOF
+
+# The rest of that --help output, bigger than a pipe buffer.
+yes '  --some-other-flag' | head -c 1048576 > "$shim/bighelp"
 
 chmod +x "$shim/glow" "$shim/less"
 
@@ -59,16 +73,17 @@ assert_contains "$(cat "$mark" 2>/dev/null || echo none)" "less -R" \
 # the alternate screen, so there is no scrollback to fall back on: the wheel did
 # nothing at all while every fzf mode scrolled. The flag is probed rather than
 # assumed, so both answers have to be held.
-assert_contains "$(cat "$mark" 2>/dev/null || echo none)" "--mouse" \
-  "a less that knows --mouse is given it, so the wheel scrolls"
+assert_eq "$(cat "$mark" 2>/dev/null || echo none)" "less -R --mouse" \
+  "a less that knows --mouse is run as exactly: less -R --mouse"
 
 rm -f "$mark"
 out="$(PATH="$shim:$PATH"; export PATH; LESS_HAS_MOUSE=0 with_tty "$PREEN" "$doc" | tr -d '\r')"
 assert_contains "$out" "RENDERED note.md" "an older less still gets the render"
-assert_not_contains "$(cat "$mark" 2>/dev/null || echo none)" "--mouse" \
-  "a less that does not know --mouse is not handed it"
-assert_contains "$(cat "$mark" 2>/dev/null || echo none)" "less -R" \
-  "and is still run as less -R"
+# The exact arguments, not a substring of them: `assert_not_contains --mouse`
+# alone passed even when the old less was handed the flag, because the render
+# arrived either way.
+assert_eq "$(cat "$mark" 2>/dev/null || echo none)" "less -R" \
+  "a less that does not know --mouse is run as exactly: less -R"
 
 # ---- into a pipe -------------------------------------------------------------
 # No pager here, or `preen FILE.md | head` would hang on a full-screen program.

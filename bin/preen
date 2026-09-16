@@ -460,30 +460,40 @@ looks_like_diff() {
 # assumed: without it "less -R" writes nothing at all, which loses the whole
 # render to save a scrollback the terminal already keeps.
 #
-# --mouse is what makes the wheel work. Without it nothing asks the terminal
-# for wheel events, and because less draws on the alternate screen there is no
-# scrollback to fall back on either -- so scrolling a rendered file did
-# nothing at all, while every picker mode scrolled, because fzf asks for the
-# mouse itself.
+# --mouse is what makes the wheel work *inside tmux*. A terminal on its own
+# already handles this: Ghostty, xterm, iTerm2 and kitty default to
+# alternate-scroll (DEC mode 1007) and turn a wheel notch into arrow keys when
+# no application has asked for the mouse, so bare `less -R` scrolls there. tmux
+# with `mouse on` takes the event first and has nothing to send it to, and less
+# draws on the alternate screen so there is no scrollback to fall back on --
+# which is why a rendered file would not scroll while every picker mode did.
+# fzf asks for the mouse itself.
 #
 # It is probed, not assumed: less learned --mouse in 549 and macOS shipped an
-# older one for years, and an unknown flag makes less exit -- losing the whole
-# render, which is the failure the paragraph above already guards against.
+# older one for years. An unknown flag does not kill less -- it prints "There
+# is no --mouse option", and from 572 waits for RETURN before showing the page.
+# That is not a lost render, it is a prompt in front of every single one, which
+# is reason enough not to send the flag blind.
 #
 # The probe is a case over a command substitution, NOT `less --help | grep -q`.
-# `grep -q` exits at the first match, `less --help` takes SIGPIPE for the rest
-# of its output, and this script runs under `pipefail` -- so the pipeline
-# reports that failure and the flag is dropped. Whether it happens at all
-# depends on which process the kernel schedules first, so the pipeline form
-# answers YES or NO for the same less on the same machine. A command
-# substitution reads to the end and cannot race.
+# `grep -q` exits at the first match, the rest of less's output takes SIGPIPE,
+# and this script runs under `pipefail` -- so the pipeline reports that failure
+# and the flag is dropped. It needs only one write to land after grep has gone,
+# not a full pipe buffer, so the same less on the same machine answers yes or
+# no depending on scheduling. A command substitution reads to the end and
+# cannot race.
+#
+# No --wheel-lines. A terminal reporting the mouse sends one event per row
+# already -- three per notch, in a default Ghostty -- so setting it multiplies
+# a second time and the pager would scroll three times faster than the fzf
+# preview beside it.
 #
 # The cost is worth stating: with --mouse a drag selects inside less rather
 # than in the terminal, so copying text needs shift held down.
 pager() {
   [ -t 1 ] && command -v less >/dev/null || { cat; return; }
   case "$(less --help 2>/dev/null)" in
-    *--mouse*) less -R --mouse --wheel-lines=3 ;;
+    *--mouse*) less -R --mouse ;;
     *)         less -R ;;
   esac
 }
