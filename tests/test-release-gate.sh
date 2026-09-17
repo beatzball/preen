@@ -180,6 +180,22 @@ gate notes notes-missing
 assert_eq "$rc" "1" "notes exits 1 when the section does not exist"
 assert_contains "$err" "## [9.9.9]" "...and names the heading it looked for"
 
+# ---- this repository, as it stands ------------------------------------------
+# The fixtures prove the gate works. This proves this checkout passes it, which
+# is what catches a VERSION bumped here without its changelog section.
+#
+# Guarded on VERSION alone. A checkout with no VERSION predates versioning,
+# which is a valid state, so it is skipped with a note rather than a PASS that
+# grades nothing. A VERSION with no CHANGELOG.md is not skipped: that is the
+# mistake this is for.
+if [ -f "$PREEN_ROOT/VERSION" ]; then
+  "$GATE" check "$PREEN_ROOT" > "$root/self.out" 2> "$root/self.err"; rc=$?
+  assert_eq "$rc" "0" "this repository's own VERSION and CHANGELOG.md agree"
+  assert_eq "$(cat "$root/self.err")" "" "...and the gate gives no reason to refuse them"
+else
+  printf '  NOTE: no VERSION in this checkout, so there is nothing of its own to check\n'
+fi
+
 # ---- usage ------------------------------------------------------------------
 project usage $'1.2.3\n' "$two_sections"
 gate publish usage
