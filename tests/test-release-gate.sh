@@ -94,19 +94,62 @@ assert_contains "$err" "no CHANGELOG.md" "...and says CHANGELOG.md is missing"
 # Each malformed value gets a section headed with that exact value, so only the
 # format rule can refuse it. Without that, a gate with no format rule at all
 # would still exit 1 here, for the missing section, and pass.
-n=0
-for bad in "1.2.3.4" "v1.2.3" "" "1.2"; do
-  n=$((n + 1))
-  project "malformed-$n" "$bad"$'\n' "# Changelog
+#
+# A function rather than a loop over the values, because three of them hold a
+# space, a CR or a newline, and those do not belong in an assertion's label.
+malformed() {
+  # malformed <fixture> <label> <VERSION bytes> [version a lenient gate reaches]
+  #
+  # The changelog gets a section headed with the value itself, so a gate with no
+  # format rule still finds one and exits 0 rather than 1 for another reason.
+  # The fourth argument adds a second section for the value a gate that stripped
+  # whitespace, or read only the first line, would arrive at — so those two
+  # mutations exit 0 here as well, and the exit assertion is what catches them.
+  project "$1" "$3"$'\n' "# Changelog
 
-## [$bad]
+## [$3]
 
 - a section for exactly this value
+${4:+
+## [$4]
+
+- a section for the value a more forgiving gate would reach
+}"
+  gate check "$1"
+  assert_eq "$rc" "1" "check exits 1 for a VERSION that is $2"
+  assert_contains "$err" "not N.N.N" "...and says so for a VERSION that is $2"
+}
+malformed four-parts  "four parts, 1.2.3.4"        "1.2.3.4"
+malformed v-prefixed  "v-prefixed, v1.2.3"         "v1.2.3"
+malformed two-parts   "two parts, 1.2"             "1.2"
+malformed blank-line  "a blank line"               ""
+
+# These three are the whole reason this gate reads VERSION with $(cat) and an
+# anchored regex instead of roost's `tr -d "[:space:]"`, which would strip the
+# space out of "1.2 .3" and call it 1.2.3. Put roost's line back, or validate
+# only the first line, and these are what go red.
+malformed inner-space "a space inside it, 1.2 .3"  "1.2 .3"       "1.2.3"
+malformed carriage    "CRLF, 1.2.3 and a CR"       $'1.2.3\r'      "1.2.3"
+malformed second-line "two lines, 1.2.3 then 4.5.6" $'1.2.3\n4.5.6' "1.2.3"
+
+# The CR case again, for the message rather than the exit. Printed raw, a CR
+# moves the cursor to the start of the line, so a CI log reads
+# "VERSION is '1.2.3', which is not N.N.N" — which names a valid version.
+gate check carriage
+assert_contains "$err" '\r' "a CR in VERSION is shown as an escape, not printed raw"
+
+# The brief asks for an empty file. The loop above writes one newline; this is
+# a file of no bytes at all.
+project empty-file "" "# Changelog
+
+## []
+
+- a section for a version that is not there
 "
-  gate check "malformed-$n"
-  assert_eq "$rc" "1" "check exits 1 for VERSION '$bad'"
-  assert_contains "$err" "not N.N.N" "...and says '$bad' is not N.N.N"
-done
+gate check empty-file
+assert_eq "$(wc -c < "$root/empty-file/VERSION" | tr -d ' ')" "0" "the empty-file fixture really is 0 bytes"
+assert_eq "$rc" "1" "check exits 1 for a VERSION file of no bytes"
+assert_contains "$err" "not N.N.N" "...and says it is not N.N.N"
 
 project no-section $'9.9.9\n' "$two_sections"
 gate check no-section
@@ -139,6 +182,36 @@ Each release is a section headed like this:
 '
 gate check not-a-heading
 assert_eq "$rc" "1" "a line that only contains ## [N.N.N] is not its heading"
+
+# A date after the version is Keep a Changelog's own form, so it must count as
+# the heading — and notes must drop that whole line, not print the date.
+project dated $'1.2.3\n' '# Changelog
+
+## [1.2.3] - 2026-09-17
+
+### Added
+
+- the new thing
+
+## [1.2.2] - 2026-09-01
+
+- an older thing
+'
+gate check dated
+assert_eq "$rc" "0" "a dated heading counts as this version's section"
+gate notes dated
+assert_eq "$out" "### Added
+
+- the new thing" "notes drops a dated heading whole, and still stops at the next one"
+
+# A changelog written on Windows: every line ends CR LF. The CR must not hide
+# the heading, and must not travel into the release body either.
+project crlf $'1.2.3\n' $'# Changelog\r\n\r\n## [1.2.3]\r\n\r\n- a changelog with CRLF line endings\r\n'
+gate check crlf
+assert_eq "$rc" "0" "a CRLF changelog's heading is still found"
+gate notes crlf
+assert_eq "$out" "- a changelog with CRLF line endings" \
+  "notes strips the CR, so the release body is not full of them"
 
 # ---- notes ------------------------------------------------------------------
 # The only section, and the last thing in the file: nothing after it to stop at.
@@ -200,3 +273,11 @@ fi
 project usage $'1.2.3\n' "$two_sections"
 gate publish usage
 assert_eq "$rc" "2" "an unknown subcommand is a usage error, exit 2"
+
+# Not through gate(), which always passes a subcommand and one directory.
+"$GATE" > "$root/usage.none" 2>&1; rc=$?
+assert_eq "$rc" "2" "no subcommand at all is a usage error, exit 2"
+assert_contains "$(cat "$root/usage.none")" "usage:" "...and prints the usage line"
+
+"$GATE" check "$root/usage" extra > "$root/usage.many" 2>&1; rc=$?
+assert_eq "$rc" "2" "a third argument is a usage error, exit 2"

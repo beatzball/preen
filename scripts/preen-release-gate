@@ -3,7 +3,8 @@
 # rather than inline in a workflow, so tests/test-release-gate.sh can exercise
 # it. A workflow step is not testable; this is.
 #
-#   preen-release-gate version [DIR]   print VERSION, trailing newline stripped
+#   preen-release-gate version [DIR]   print VERSION, trailing newlines
+#                                      stripped. Exit 1 if it is not N.N.N.
 #   preen-release-gate check [DIR]     VERSION must be N.N.N and CHANGELOG.md
 #                                      must have a `## [N.N.N]` section for it.
 #                                      Exit 1, with the reason, if not.
@@ -48,16 +49,26 @@ log_file="$dir/CHANGELOG.md"
 
 [ -f "$ver_file" ] || die "no VERSION file at $ver_file"
 
-# $(cat) drops the trailing newline and nothing else. Stripping all whitespace
-# would turn "1.2 .3" into a valid 1.2.3; a stray space or CR is refused below
-# instead, so the file on disk is exactly what gets tagged.
+# $(cat) drops trailing newlines and nothing else. Stripping all whitespace, as
+# roost's copy does, would turn "1.2 .3" into a valid 1.2.3; a stray space, CR
+# or second line is refused below instead, so what gets tagged is exactly what
+# the file says. tests/test-release-gate.sh holds all three.
 v="$(cat "$ver_file")"
 
 # Anchored against the whole string, so "1.2.3.4", "v1.2.3" and an empty file
 # all fail, and so does a second line after a good first one. The pattern lives
 # in a variable because a quoted pattern is matched literally, not as a regex.
 exact='^[0-9]+\.[0-9]+\.[0-9]+$'
-[[ $v =~ $exact ]] || die "VERSION is '$v', which is not N.N.N"
+if ! [[ $v =~ $exact ]]; then
+  # %q, not raw: a CR prints as nothing at all, so a CI log would read
+  # `VERSION is '1.2.3', which is not N.N.N` and look like a lie. %q shows it
+  # as $'1.2.3\r'. bash 3.2 has both %q and printf -v.
+  printf -v shown '%q' "$v"
+  die "VERSION is $shown, which is not N.N.N" \
+      "N.N.N is three numbers and two dots, alone in the file: 1.2.3." \
+      "A space, a carriage return or a second line is refused, so what is" \
+      "tagged is exactly what the file says."
+fi
 
 if [ "$cmd" = version ]; then
   printf '%s\n' "$v"
@@ -68,11 +79,32 @@ fi
 
 heading="## [$v]"
 
-# The whole line, not a substring: "## [0.1.0" is found inside
-# "## [0.1.0-rc1]", and a release candidate's section is not the release's.
+# One rule for what counts as this version's heading, shared by check and notes.
+# They have to agree: a check that passes where notes then finds nothing would
+# fail at tag time, having said the release was ready.
+#
+# The line, not a substring: "## [0.1.0" is found inside "## [0.1.0-rc1]", and a
+# release candidate's section is not the release's. But trailing spaces and a CR
+# are ignored, so a CRLF changelog still matches, and a date after the version is
+# accepted, because that is Keep a Changelog's own form:
+#
+#     ## [1.2.3] - 2026-09-17
+#
 # The version is only digits and dots by now, so awk -v has nothing to unescape.
-awk -v h="$heading" '$0 == h { found = 1; exit } END { exit !found }' "$log_file" \
+is_heading='
+  function is_heading(line) {
+    sub(/[ \t\r]+$/, "", line)
+    return line == h || index(line, h " ") == 1
+  }
+'
+
+awk -v h="$heading" "$is_heading"'
+  is_heading($0) { found = 1; exit }
+  END { exit !found }
+' "$log_file" \
   || die "VERSION is $v but CHANGELOG.md has no '$heading' section." \
+         "That heading must be a line of its own, with nothing after it but a" \
+         "date: '$heading' or '$heading - 2026-09-17'." \
          "The tag job publishes that section as the release body, so an" \
          "unwritten section would ship an empty release."
 
@@ -85,12 +117,12 @@ case "$cmd" in
     # and not `##`, because a `### Added` inside the section starts with `##`
     # too. Blank lines before the body are dropped; the capture drops the ones
     # after it.
-    out="$(awk -v h="$heading" '
-      $0 == h { inside = 1; next }
+    out="$(awk -v h="$heading" "$is_heading"'
+      !inside && is_heading($0) { inside = 1; next }
       !inside { next }
       index($0, "## [") == 1 { exit }
       !started && /^[[:space:]]*$/ { next }
-      { started = 1; print }
+      { started = 1; sub(/\r$/, ""); print }
     ' "$log_file")"
     [ -n "$out" ] || die "the '$heading' section is empty — refusing to publish" \
                          "a release with no body."
