@@ -5,7 +5,37 @@ set -uo pipefail
 
 GLOW_STYLE="${PREEN_GLOW_STYLE:-$HOME/.config/glow/roost.json}"
 [ -f "$GLOW_STYLE" ] || GLOW_STYLE="dark"
-SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# SELF is this script's real path, used for the callbacks preen hands fzf
+# (--preview, --show, --toggle) and to find the checkout it was run from.
+#
+# The symlink loop is not decoration: install.sh links $REPO/bin/preen into
+# ~/.local/bin, so for an installed preen ${BASH_SOURCE[0]} is that link.
+# `cd "$(dirname …)" && pwd` answers for the directory holding the LINK, so
+# SELF was the link itself and PREEN_HOME was ~/.local -- which holds no
+# VERSION. Each readlink step is resolved against the directory of the link
+# that named it, because a relative link means "relative to where I live".
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  SELF_DIR="$(cd -P "$(dirname "$SELF")" && pwd)"
+  SELF="$(readlink "$SELF")"
+  case "$SELF" in /*) ;; *) SELF="$SELF_DIR/$SELF" ;; esac
+done
+SELF="$(cd -P "$(dirname "$SELF")" && pwd)/$(basename "$SELF")"
+PREEN_HOME="$(cd -P "$(dirname "$SELF")/.." && pwd)"
+
+# VERSION is the release number, the same file scripts/preen-release-gate
+# checks against CHANGELOG.md.
+#
+# `read -r`, not `$(cat)`: this line runs on every invocation, including the
+# --preview callback fzf fires on every keystroke, and a missing or unreadable
+# VERSION -- a half-copied checkout, a stray chmod -- must not take preen down
+# with it. A read failure falls back to the literal "unknown".
+#
+# `2>/dev/null` before the `<`: bash applies redirections left to right, and a
+# missing file fails at the `<` itself, so a trailing 2>/dev/null would print
+# "No such file or directory" past this line. Put first, it is already in place
+# when the open fails. This is bin/roost:76's line, and its reasoning.
+read -r PREEN_VERSION 2>/dev/null < "$PREEN_HOME/VERSION" || PREEN_VERSION=unknown
 
 die() { printf 'preen: %s\n' "$*" >&2; exit 1; }
 glow_major() { glow --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p'; }
@@ -620,6 +650,12 @@ case "${1:-}" in
   diff) KIND=diff; shift; REV="${1:-}" ;;
   pr)   KIND=pr;   shift; PR="${1:-}" ;;
   worktrees|wt) KIND=wt; shift ;;
+  --version|-V|version)
+    # Always exit 0, even at "unknown": asking what version this is must never
+    # be the thing that fails, least of all on the damaged checkout that is the
+    # reason someone is asking.
+    printf 'preen %s\n' "$PREEN_VERSION"
+    exit 0 ;;
   -h|--help)
     cat <<'H'
 preen — markdown and diffs in the terminal
@@ -633,6 +669,7 @@ preen — markdown and diffs in the terminal
   preen FILE.md         render one file, paged, and quit
   ... | preen           render piped input and quit
   preen - < FILE        the same, said out loud
+  preen --version       print preen's version (-V, or `preen version`)
 
 pr mode needs the gh CLI. It reads the PR diff over the network and shows it,
 with no checkout, no fetch and no stash. The one key that reaches your
