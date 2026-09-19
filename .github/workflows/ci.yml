@@ -223,6 +223,39 @@ jobs:
           echo "running the suite under: $(command -v bash) $(bash --version | head -n 1)"
           tests/run.sh
 
+  # Release bookkeeping. The logic lives in scripts/preen-release-gate, not
+  # inline here, because a workflow step cannot be tested and a script can --
+  # tests/test-release-gate.sh has watched every refusal in it fail. That
+  # script's header says why this is not release-please.
+  #
+  # Read-only, so it takes the `contents: read` block at the top unchanged.
+  version-changelog:
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        # Full history, so the base commit is there to read VERSION from.
+        with: { fetch-depth: 0 }
+      - name: A VERSION bump needs a matching CHANGELOG section
+        env:
+          # Through `env:`, not `${{ }}` in the body, for the reason given on
+          # PROD_BASE_URL in verify-prod.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          base_version="$RUNNER_TEMP/base-version"
+          # Only a CHANGED VERSION is this job's business. A PR that leaves it
+          # alone should not be blocked by a section someone else owes. When
+          # the base has no VERSION, `git show` fails, and a VERSION on this
+          # side is new -- a bump, so it falls through to the gate.
+          if git show "$BASE_SHA:VERSION" > "$base_version" 2>/dev/null \
+             && [ -f VERSION ] && cmp -s "$base_version" VERSION; then
+            echo "VERSION unchanged -- nothing to check."; exit 0
+          fi
+          [ -f VERSION ] || { echo "No VERSION file -- this checkout does not cut versioned releases."; exit 0; }
+          echo "VERSION changed to $(scripts/preen-release-gate version) -- running the gate."
+          scripts/preen-release-gate check
+
   # The build is the real check on the site: it fails on a duplicate slug, a
   # missing frontmatter title or a broken component, and it prerenders every
   # route so a page that would 404 in production fails here instead.
