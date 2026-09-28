@@ -87,3 +87,86 @@ if [ -n "$want" ]; then
   out="$("$box/bin/preen-again" --version 2>&1)"
   assert_eq "$out" "preen $want" "a symlink to a symlink is followed to the end"
 fi
+
+# ---- a checkout whose path holds a space -------------------------------------
+# Resolving the symlink is what makes this matter. preen hands fzf its own path
+# in --preview and in three execute() binds, and fzf gives each of those to
+# `$SHELL -c`. While SELF was the link in ~/.local/bin that path had no space in
+# it; now it is the checkout, so a checkout under `~/my code` would split into
+# two words and every callback would die with 127 -- a picker that draws a list
+# and previews nothing.
+#
+# So this drives the real callback: preen builds it, a stand-in fzf reads the one
+# the real picker would be given, and runs it the way fzf does -- through $SHELL,
+# with the environment preen exported. Only fzf's own {} substitution is
+# reconstructed here.
+#
+# diff mode rather than md mode, because the preview then renders through delta,
+# which this suite requires, rather than through glow, which CI does not install.
+spaced="$box/my code/preen"
+mkdir -p "$spaced/bin" "$box/prefix"
+cp "$PREEN_ROOT/bin/preen" "$spaced/bin/preen"
+[ -f "$PREEN_ROOT/VERSION" ] && cp "$PREEN_ROOT/VERSION" "$spaced/VERSION"
+ln -sf "$spaced/bin/preen" "$box/prefix/preen"
+
+if [ -n "$want" ]; then
+  out="$("$box/prefix/preen" --version 2>&1)"
+  assert_eq "$out" "preen $want" "a checkout path with a space still reports its version"
+fi
+
+# The picker needs no VERSION, so this part runs on a checkout that has none —
+# which is also what lets the harness sweep reach the two temporary paths below.
+d="$(new_repo)" || exit 1
+printf 'a line this test can look for\n' >> "$d/f.txt"
+
+fzfshim=""
+mktmpd fzfshim preen-cbshim
+cat > "$fzfshim/fzf" <<'SHIM'
+#!/usr/bin/env bash
+# Stand in for fzf: record what preen asked for, then run the --preview command
+# the way fzf runs it, so a path that needs quoting fails here as it would there.
+out="$PREEN_SHIM_OUT"
+printf '%s\n' "$@" > "$out.argv"
+preview=""
+take=0
+for a in "$@"; do
+[ "$take" = 1 ] && { preview="$a"; take=0; }
+[ "$a" = --preview ] && take=1
+done
+tr '\0' '\n' | head -n 1 > "$out.first"
+name="$(cat "$out.first")"
+# fzf single-quotes the selection itself; that is the one part of fzf rebuilt
+# here. q holds one single quote, which is awkward to write inline.
+q="'"
+cmd="${preview//\{\}/$q$name$q}"
+printf '%s\n' "$cmd" > "$out.cmd"
+${SHELL:-/bin/sh} -c "$cmd" > "$out.preview" 2>&1
+printf '%s\n' "$?" > "$out.rc"
+exit 0
+SHIM
+chmod +x "$fzfshim/fzf"
+
+cb="$box/callback"
+( cd "$d" && PATH="$fzfshim:$PATH" PREEN_SHIM_OUT="$cb" \
+    "$box/prefix/preen" diff >/dev/null 2>&1 )
+
+assert_eq "$(cat "$cb.rc" 2>/dev/null)" "0" \
+  "the preview callback runs from a checkout whose path holds a space"
+# Not just the exit status: a callback whose argument is mis-quoted also exits
+# 0, having rendered nothing. This is the diff preen was asked for.
+assert_contains "$(cat "$cb.preview" 2>/dev/null)" "a line this test can look for" \
+  "...and renders the diff it was asked for"
+assert_not_contains "$(cat "$cb.cmd" 2>/dev/null)" "my code" \
+  "preen's own path is not pasted into the callback text"
+rm -rf "$fzfshim" "$d"
+
+# ---- bin reached through a directory symlink ---------------------------------
+# `cd -P`, not `cd`: a logical `..` from a linked bin/ climbs the link's parent
+# instead of the checkout, and VERSION is not there.
+if [ -n "$want" ]; then
+  linked="$box/dirlink"
+  mkdir -p "$linked"
+  ln -sfn "$spaced/bin" "$linked/bin"
+  out="$("$linked/bin/preen" --version 2>&1)"
+  assert_eq "$out" "preen $want" "bin/ reached through a directory symlink still finds VERSION"
+fi

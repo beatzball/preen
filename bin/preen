@@ -23,6 +23,15 @@ done
 SELF="$(cd -P "$(dirname "$SELF")" && pwd)/$(basename "$SELF")"
 PREEN_HOME="$(cd -P "$(dirname "$SELF")/.." && pwd)"
 
+# The same path, for the callbacks preen hands fzf. It goes through the
+# environment rather than into the command text, for the reason PREEN_WT_DIR
+# below already does: fzf gives each callback to `$SHELL -c`, so a path holding
+# a space splits into two words, and one holding $(...) or a backtick is run.
+# That used to bite only someone running bin/preen out of such a checkout; with
+# SELF resolved through the symlink it would be everyone who installed from one,
+# because SELF is no longer the short link in ~/.local/bin.
+export PREEN_SELF="$SELF"
+
 # VERSION is the release number, the same file scripts/preen-release-gate
 # checks against CHANGELOG.md.
 #
@@ -760,7 +769,7 @@ run_picker() {
     --border=rounded \
     --border-label="$LABEL" \
     --delimiter="$WT_SEP" --with-nth="$WITH_NTH" \
-    --preview "$SELF --preview $PICK" \
+    --preview "\"\$PREEN_SELF\" --preview $PICK" \
     --preview-window 'right,65%,border-left' \
     --header "$HEADER" \
     --prompt "$PROMPT" \
@@ -768,7 +777,7 @@ run_picker() {
     --color 'fg:#c8c3e0,fg+:#e0dcf5,bg+:#2a2640,hl:#bd93f9,hl+:#bd93f9' \
     --color 'border:#7c6ff0,label:#bd93f9,prompt:#7c6ff0,pointer:#bd93f9' \
     --color 'header:#8a84b0,info:#8a84b0,spinner:#7c6ff0,marker:#3a3558' \
-    --bind "ctrl-s:execute-silent($SELF --toggle)+refresh-preview" \
+    --bind "ctrl-s:execute-silent(\"\$PREEN_SELF\" --toggle)+refresh-preview" \
     --bind "enter:$ENTER" \
     --bind "ctrl-e:execute(\${EDITOR:-vi} $EDIT)" \
     --bind "ctrl-c:execute-silent(touch '$PREEN_STATE/quit')+abort" \
@@ -820,7 +829,7 @@ wt_loop() {
       # itself, and the shell running the bind expands PREEN_WT_DIR safely.
       export PREEN_WT_DIR="$dir"
       EDIT='"$PREEN_WT_DIR"/{}'
-      ENTER="execute($SELF --show {})"
+      ENTER="execute(\"\$PREEN_SELF\" --show {})"
       HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc back'
     else
       echo none > "$PREEN_STATE/kind"
@@ -923,5 +932,5 @@ fi
 
 [ ${#FILES[@]} -gt 0 ] || die "nothing to show ($KIND mode)"
 
-ENTER="execute($SELF --show {})"
+ENTER="execute(\"\$PREEN_SELF\" --show {})"
 run_picker >/dev/null
