@@ -255,12 +255,27 @@ jobs:
             echo "VERSION unchanged -- nothing to check."; exit 0
           fi
           [ -f VERSION ] || { echo "No VERSION file -- this checkout does not cut versioned releases."; exit 0; }
-          echo "VERSION changed to $(scripts/preen-release-gate version) -- running the gate."
+          # A plain assignment, not `echo "$(...)"`. Under `-e` a command
+          # substitution inside another command's arguments cannot fail the
+          # step -- `echo` succeeds and the gate's refusal scrolls past as a
+          # line of log. An assignment carries the status, so a VERSION that
+          # is not N.N.N stops here with the gate's own message.
+          v="$(scripts/preen-release-gate version)"
+          echo "VERSION changed to $v -- running the gate."
           scripts/preen-release-gate check
 
-  # Cut the tag once VERSION lands on main with no tag behind it. It runs on
-  # every push to main, so it has to be idempotent: a push that did not bump
-  # VERSION finds v$VERSION already tagged and stops there, green.
+  # Cut the tag once VERSION lands on main with no release behind it. It runs
+  # on every push to main, so it has to be idempotent: a push that did not bump
+  # VERSION finds v$VERSION already released and stops there, green.
+  #
+  # The **release**, not the tag, is what says the work is done, and that is
+  # deliberate. The tag is pushed first and the release is created after it, so
+  # there is a window where the tag exists and the release does not -- a 502, a
+  # rate limit or a missing scope on the `gh` call is enough. Keyed on the tag,
+  # the re-run would find it and exit 0, and every later push would too: a
+  # green job hiding a release that was never made, which is the failure #43 is
+  # about. Keyed on the release, the re-run sees no release, skips the tag it
+  # already has, and finishes the half-made one.
   #
   # `needs: [shell]` because a tag is awkward to take back once anyone has
   # fetched it, so none is cut over a failing suite. Not `site` or
@@ -279,6 +294,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # One tag job at a time. Two pushes to main close together would otherwise
+    # both see no tag, and the loser's `git push` of the tag fails red for no
+    # real reason. `cancel-in-progress: false` because canceling this one
+    # mid-step is how a tag ends up pushed with no release behind it -- the
+    # very state the step is written to survive, but not worth causing.
+    concurrency:
+      group: tag
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         # Full history and every tag, so the already-tagged check below sees
@@ -292,8 +315,16 @@ jobs:
           # failure: there is simply nothing to release.
           [ -f VERSION ] || { echo "No VERSION file -- nothing to tag."; exit 0; }
           v="$(scripts/preen-release-gate version)"
-          if git rev-parse -q --verify "refs/tags/v$v" >/dev/null; then
-            echo "v$v is already tagged -- nothing to do."; exit 0
+          # The release is the stop condition, for the reason in the comment
+          # above the job. `gh release view` says nothing on stdout that this
+          # step wants, so both streams go away; the point is only its status.
+          #
+          # It can also fail for a reason that is not "no such release" -- a
+          # bad token, the API down. That case falls through rather than
+          # stopping, and then `gh release create` at the end fails loudly with
+          # the real error. The job never goes quiet on a `gh` that is broken.
+          if gh release view "v$v" >/dev/null 2>&1; then
+            echo "v$v is already released -- nothing to do."; exit 0
           fi
           # version-changelog enforces this on a pull request, but a direct
           # push to main never passes through that job, and a release with
@@ -301,20 +332,30 @@ jobs:
           scripts/preen-release-gate check
           notes="$RUNNER_TEMP/notes.md"
           scripts/preen-release-gate notes > "$notes"
-          # An annotated tag records a tagger, and the runner has no git
-          # identity -- roost's first real run of this job died on `fatal:
-          # empty ident name`. The gate's tests cannot catch that: it is the
-          # runner, not the script, and this job only runs on main.
-          #
-          # github-actions[bot], not a person. CI cut the tag, and saying so
-          # is more honest than signing it with someone's name. The address is
-          # GitHub's noreply for the bot, so it puts nothing personal in the
-          # history.
-          git config user.name  'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -a "v$v" -m "v$v"
-          git push origin "v$v"
-          gh release create "v$v" --title "v$v" --notes-file "$notes"
+          if git rev-parse -q --verify "refs/tags/v$v" >/dev/null; then
+            # Tag without a release: a previous run got this far and then lost
+            # the `gh` call. Keep the tag it made -- re-cutting it would fail
+            # on the remote anyway -- and go create the release it owes.
+            echo "v$v is tagged but has no release -- finishing it."
+          else
+            # An annotated tag records a tagger, and the runner has no git
+            # identity -- roost's first real run of this job died on `fatal:
+            # empty ident name`. The gate's tests cannot catch that: it is the
+            # runner, not the script, and this job only runs on main.
+            #
+            # github-actions[bot], not a person. CI cut the tag, and saying so
+            # is more honest than signing it with someone's name. The address
+            # is GitHub's noreply for the bot, so it puts nothing personal in
+            # the history.
+            git config user.name  'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "v$v" -m "v$v"
+            git push origin "v$v"
+          fi
+          # --verify-tag, so `gh` refuses rather than inventing a lightweight
+          # tag of its own if the push above never landed. What gets released
+          # is the annotated tag this job made, or nothing.
+          gh release create "v$v" --verify-tag --title "v$v" --notes-file "$notes"
           echo "Tagged and released v$v."
 
   # The build is the real check on the site: it fails on a duplicate slug, a
