@@ -84,17 +84,25 @@ heading="## [$v]"
 # fail at tag time, having said the release was ready.
 #
 # The line, not a substring: "## [0.1.0" is found inside "## [0.1.0-rc1]", and a
-# release candidate's section is not the release's. But trailing spaces and a CR
-# are ignored, so a CRLF changelog still matches, and a date after the version is
-# accepted, because that is Keep a Changelog's own form:
+# release candidate's section is not the release's. Two things are forgiven: a
+# trailing CR, so a changelog written on Windows still matches, and anything at
+# all after a space or a tab, which is where Keep a Changelog puts the date:
 #
 #     ## [1.2.3] - 2026-09-17
+#     ## [1.2.3] - 2026-09-17 [YANKED]
+#
+# Whatever follows that space is not read. A date is what belongs there, but this
+# is not the place to have an opinion about how it is written. Trailing spaces
+# need no rule of their own: they are already "a space, then nothing".
 #
 # The version is only digits and dots by now, so awk -v has nothing to unescape.
 is_heading='
-  function is_heading(line) {
-    sub(/[ \t\r]+$/, "", line)
-    return line == h || index(line, h " ") == 1
+  function is_heading(line,   after) {
+    sub(/\r$/, "", line)
+    if (line == h) return 1
+    if (index(line, h) != 1) return 0
+    after = substr(line, length(h) + 1, 1)
+    return after == " " || after == "\t"
   }
 '
 
@@ -103,8 +111,8 @@ awk -v h="$heading" "$is_heading"'
   END { exit !found }
 ' "$log_file" \
   || die "VERSION is $v but CHANGELOG.md has no '$heading' section." \
-         "That heading must be a line of its own, with nothing after it but a" \
-         "date: '$heading' or '$heading - 2026-09-17'." \
+         "That heading must be a line of its own: '$heading', or that" \
+         "followed by a space and a date, as in '$heading - 2026-09-17'." \
          "The tag job publishes that section as the release body, so an" \
          "unwritten section would ship an empty release."
 

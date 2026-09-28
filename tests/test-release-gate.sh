@@ -138,8 +138,8 @@ malformed second-line "two lines, 1.2.3 then 4.5.6" $'1.2.3\n4.5.6' "1.2.3"
 gate check carriage
 assert_contains "$err" '\r' "a CR in VERSION is shown as an escape, not printed raw"
 
-# The brief asks for an empty file. The loop above writes one newline; this is
-# a file of no bytes at all.
+# The brief asks for an empty file. The blank-line call above writes one
+# newline; this is a file of no bytes at all.
 project empty-file "" "# Changelog
 
 ## []
@@ -203,6 +203,29 @@ gate notes dated
 assert_eq "$out" "### Added
 
 - the new thing" "notes drops a dated heading whole, and still stops at the next one"
+
+# A tab before the date, and trailing spaces after the version: both are the
+# same kind of whitespace nobody sees in an editor, and neither hides a section.
+project dated-tab $'1.2.3\n' "# Changelog
+
+## [1.2.3]"$'\t'"- 2026-09-17
+
+- written with a tab before the date
+"
+gate check dated-tab
+assert_eq "$rc" "0" "a tab before the date still counts as the heading"
+
+project trailing-space $'1.2.3\n' "# Changelog
+
+## [1.2.3]   
+
+- written with trailing spaces on the heading
+"
+gate check trailing-space
+assert_eq "$rc" "0" "trailing spaces on the heading do not hide the section"
+gate notes trailing-space
+assert_eq "$out" "- written with trailing spaces on the heading" \
+  "...and notes still drops that heading"
 
 # A changelog written on Windows: every line ends CR LF. The CR must not hide
 # the heading, and must not travel into the release body either.
