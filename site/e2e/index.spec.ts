@@ -8,6 +8,7 @@ const DOC_ROUTES = [
   '/docs/worktrees',
   '/docs/git-integration',
   '/docs/theming',
+  '/docs/changelog',
 ];
 
 const PRERENDERED_ROUTES = ['/', ...DOC_ROUTES];

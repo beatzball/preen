@@ -15,7 +15,9 @@
     "generate": "litro generate",
     "test:e2e": "pnpm test:e2e:dev && pnpm test:e2e:preview",
     "test:e2e:dev": "playwright test",
-    "test:e2e:preview": "LITRO_E2E_TARGET=preview playwright test"
+    "test:e2e:preview": "LITRO_E2E_TARGET=preview playwright test",
+    "sync": "node scripts/sync-changelog.mjs",
+    "sync:check": "node scripts/sync-changelog.mjs --check"
   },
   "dependencies": {
     "@beatzball/litro": "latest",
