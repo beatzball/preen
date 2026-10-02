@@ -316,15 +316,29 @@ jobs:
           [ -f VERSION ] || { echo "No VERSION file -- nothing to tag."; exit 0; }
           v="$(scripts/preen-release-gate version)"
           # The release is the stop condition, for the reason in the comment
-          # above the job. `gh release view` says nothing on stdout that this
-          # step wants, so both streams go away; the point is only its status.
+          # above the job. The status alone is not enough to read it, though:
+          # `gh release view` exits 1 for "release not found" AND for
+          # "HTTP 401: Bad credentials", a 502 and a rate limit. On the status
+          # alone, a broken API therefore reads as "no release yet, go make
+          # one" -- the job writes while blind to what is already there, and in
+          # the worst case re-cuts v$v on a different commit than the release
+          # that already exists was made from.
           #
-          # It can also fail for a reason that is not "no such release" -- a
-          # bad token, the API down. That case falls through rather than
-          # stopping, and then `gh release create` at the end fails loudly with
-          # the real error. The job never goes quiet on a `gh` that is broken.
-          if gh release view "v$v" >/dev/null 2>&1; then
+          # So branch on what gh SAID, and only an exact "release not found"
+          # counts as a green light. The redirection order matters and is not
+          # the usual one: `2>&1 >/dev/null` points stderr at the capture first
+          # and stdout at nothing after, so $out holds the message and none of
+          # the release body.
+          #
+          # This fails closed. A reworded message, a new failure mode, anything
+          # unrecognised stops the job with gh's own words in the log -- noisy
+          # when gh changes its wording, which is the side to be wrong on when
+          # the alternative is a write made on a guess.
+          if out="$(gh release view "v$v" 2>&1 >/dev/null)"; then
             echo "v$v is already released -- nothing to do."; exit 0
+          elif [ "$out" != "release not found" ]; then
+            echo "::error::gh release view could not say whether v$v is released: $out"
+            exit 1
           fi
           # version-changelog enforces this on a pull request, but a direct
           # push to main never passes through that job, and a release with
