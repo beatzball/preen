@@ -7,10 +7,12 @@ on: [push, pull_request]
 # On a push to main that token is live in the same run as the job holding
 # COOLIFY_API_TOKEN, so it is worth saying out loud what it may do.
 #
-# `contents: read` is the whole of it, and no job overrides it, because none
-# of them writes anything back to GitHub: the four that check out only read,
-# `deploy` reaches Coolify over a webhook with its own separate secret, and
-# `verify-prod` only makes HTTP requests to the live site.
+# `contents: read` is the default, and one job overrides it: `tag`, which
+# pushes a tag and creates a release, and says `contents: write` in its own
+# block rather than widening this one. None of the others writes anything
+# back to GitHub: the ones that check out only read, `deploy` reaches Coolify
+# over a webhook with its own separate secret, and `verify-prod` only makes
+# HTTP requests to the live site.
 #
 # This narrows more than it looks. The repository default is already `read`,
 # so the block reads like a restatement -- but naming ANY scope here sets
@@ -222,6 +224,153 @@ jobs:
         run: |
           echo "running the suite under: $(command -v bash) $(bash --version | head -n 1)"
           tests/run.sh
+
+  # Release bookkeeping. The logic lives in scripts/preen-release-gate, not
+  # inline here, because a workflow step cannot be tested and a script can --
+  # tests/test-release-gate.sh has watched every refusal in it fail. That
+  # script's header says why this is not release-please.
+  #
+  # Read-only, so it takes the `contents: read` block at the top unchanged.
+  version-changelog:
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        # Full history, so the base commit is there to read VERSION from.
+        with: { fetch-depth: 0 }
+      - name: A VERSION bump needs a matching CHANGELOG section
+        env:
+          # Through `env:`, not `${{ }}` in the body, for the reason given on
+          # PROD_BASE_URL in verify-prod.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          base_version="$RUNNER_TEMP/base-version"
+          # Only a CHANGED VERSION is this job's business. A PR that leaves it
+          # alone should not be blocked by a section someone else owes. When
+          # the base has no VERSION, `git show` fails, and a VERSION on this
+          # side is new -- a bump, so it falls through to the gate.
+          if git show "$BASE_SHA:VERSION" > "$base_version" 2>/dev/null \
+             && [ -f VERSION ] && cmp -s "$base_version" VERSION; then
+            echo "VERSION unchanged -- nothing to check."; exit 0
+          fi
+          [ -f VERSION ] || { echo "No VERSION file -- this checkout does not cut versioned releases."; exit 0; }
+          # A plain assignment, not `echo "$(...)"`. Under `-e` a command
+          # substitution inside another command's arguments cannot fail the
+          # step -- `echo` succeeds and the gate's refusal scrolls past as a
+          # line of log. An assignment carries the status, so a VERSION that
+          # is not N.N.N stops here with the gate's own message.
+          v="$(scripts/preen-release-gate version)"
+          echo "VERSION changed to $v -- running the gate."
+          scripts/preen-release-gate check
+
+  # Cut the tag once VERSION lands on main with no release behind it. It runs
+  # on every push to main, so it has to be idempotent: a push that did not bump
+  # VERSION finds v$VERSION already released and stops there, green.
+  #
+  # The **release**, not the tag, is what says the work is done, and that is
+  # deliberate. The tag is pushed first and the release is created after it, so
+  # there is a window where the tag exists and the release does not -- a 502, a
+  # rate limit or a missing scope on the `gh` call is enough. Keyed on the tag,
+  # the re-run would find it and exit 0, and every later push would too: a
+  # green job hiding a release that was never made, which is the failure #43 is
+  # about. Keyed on the release, the re-run sees no release, skips the tag it
+  # already has, and finishes the half-made one.
+  #
+  # `needs: [shell]` because a tag is awkward to take back once anyone has
+  # fetched it, so none is cut over a failing suite. Not `site` or
+  # `smoke-image`: those test the docs site, which a release of the script
+  # does not ship.
+  #
+  # The one job that writes, so the one job with its own `permissions:`
+  # block. The top-level block stays read-only for everything else.
+  #
+  # This job cannot run before merge -- only a push to main reaches it -- so
+  # its first real test is the merge that lands it. Watch that run.
+  tag:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [shell]
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # One tag job at a time. Two pushes to main close together would otherwise
+    # both see no tag, and the loser's `git push` of the tag fails red for no
+    # real reason. `cancel-in-progress: false` because canceling this one
+    # mid-step is how a tag ends up pushed with no release behind it -- the
+    # very state the step is written to survive, but not worth causing.
+    concurrency:
+      group: tag
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        # Full history and every tag, so the already-tagged check below sees
+        # the tags that exist on the remote.
+        with: { fetch-depth: 0 }
+      - name: Tag and release, if VERSION moved ahead of the tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A checkout from before VERSION existed is a valid state, not a
+          # failure: there is simply nothing to release.
+          [ -f VERSION ] || { echo "No VERSION file -- nothing to tag."; exit 0; }
+          v="$(scripts/preen-release-gate version)"
+          # The release is the stop condition, for the reason in the comment
+          # above the job. The status alone is not enough to read it, though:
+          # `gh release view` exits 1 for "release not found" AND for
+          # "HTTP 401: Bad credentials", a 502 and a rate limit. On the status
+          # alone, a broken API therefore reads as "no release yet, go make
+          # one" -- the job writes while blind to what is already there, and in
+          # the worst case re-cuts v$v on a different commit than the release
+          # that already exists was made from.
+          #
+          # So branch on what gh SAID, and only an exact "release not found"
+          # counts as a green light. The redirection order matters and is not
+          # the usual one: `2>&1 >/dev/null` points stderr at the capture first
+          # and stdout at nothing after, so $out holds the message and none of
+          # the release body.
+          #
+          # This fails closed. A reworded message, a new failure mode, anything
+          # unrecognised stops the job with gh's own words in the log -- noisy
+          # when gh changes its wording, which is the side to be wrong on when
+          # the alternative is a write made on a guess.
+          if out="$(gh release view "v$v" 2>&1 >/dev/null)"; then
+            echo "v$v is already released -- nothing to do."; exit 0
+          elif [ "$out" != "release not found" ]; then
+            echo "::error::gh release view could not say whether v$v is released: $out"
+            exit 1
+          fi
+          # version-changelog enforces this on a pull request, but a direct
+          # push to main never passes through that job, and a release with
+          # an empty body is worse than a failed job.
+          scripts/preen-release-gate check
+          notes="$RUNNER_TEMP/notes.md"
+          scripts/preen-release-gate notes > "$notes"
+          if git rev-parse -q --verify "refs/tags/v$v" >/dev/null; then
+            # Tag without a release: a previous run got this far and then lost
+            # the `gh` call. Keep the tag it made -- re-cutting it would fail
+            # on the remote anyway -- and go create the release it owes.
+            echo "v$v is tagged but has no release -- finishing it."
+          else
+            # An annotated tag records a tagger, and the runner has no git
+            # identity -- roost's first real run of this job died on `fatal:
+            # empty ident name`. The gate's tests cannot catch that: it is the
+            # runner, not the script, and this job only runs on main.
+            #
+            # github-actions[bot], not a person. CI cut the tag, and saying so
+            # is more honest than signing it with someone's name. The address
+            # is GitHub's noreply for the bot, so it puts nothing personal in
+            # the history.
+            git config user.name  'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "v$v" -m "v$v"
+            git push origin "v$v"
+          fi
+          # --verify-tag, so `gh` refuses rather than inventing a lightweight
+          # tag of its own if the push above never landed. What gets released
+          # is the annotated tag this job made, or nothing.
+          gh release create "v$v" --verify-tag --title "v$v" --notes-file "$notes"
+          echo "Tagged and released v$v."
 
   # The build is the real check on the site: it fails on a duplicate slug, a
   # missing frontmatter title or a broken component, and it prerenders every
