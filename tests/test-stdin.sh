@@ -74,3 +74,31 @@ assert_contains "$out" "nothing on stdin" "empty input is refused by name"
 # later looks the same as it did live.
 out="$(git -C "$d" diff | "$PREEN" - 2>/dev/null | cat -v | head -40)"
 assert_contains "$out" "^[[" "escapes survive when stdout is a pipe"
+
+# ---- no temporary directory (#33) ---------------------------------------------
+# An unchecked mktemp left PREEN_BUFDIR empty, so the buffer became /input.md:
+# as root the piped input was written there, left behind, and preen exited 0.
+# This suite cannot write to / to see that, so it grades the guard instead —
+# mktemp fails for the stdin buffer, and preen has to say so and stop before
+# anything reads the buffer or renders it. Without the guard a read-only root
+# still exits 1, but as "nothing on stdin", which is why the message is checked.
+mktmpd nt preen-notmp; trap 'rm -rf "$d" "$nt" "${_preen_dep_shim:-}"' EXIT
+tmp_refused_for "$nt" preen-stdin
+for t in delta glow; do
+  cat > "$nt/$t" <<EOF
+#!/bin/sh
+case "\$1" in --version) printf 'glow version 3.0.0\n'; exit 0 ;; esac
+: > "$nt/rendered"
+cat > /dev/null
+EOF
+done
+chmod +x "$nt/delta" "$nt/glow"
+err="$(printf '# Heading\n' | PATH="$nt:$PATH" "$PREEN" - 2>&1 >/dev/null)"
+code=$?
+[ -f "$nt/asked" ]
+assert_true $? "the stdin buffer's temporary directory is refused, so the guard is reached"
+assert_eq "$code" "1" "stdin with no temporary directory exits 1"
+assert_contains "$err" "no temporary directory" "and says why"
+[ ! -f "$nt/rendered" ]
+assert_true $? "and renders nothing"
+rm -rf "$nt"
