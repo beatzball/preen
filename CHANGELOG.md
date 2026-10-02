@@ -14,6 +14,12 @@ that now runs on the platform preen is most used on.
 
 ### Added
 
+- **`preen --version` says which preen this is** (`-V`, or `preen version`). It
+  reads the `VERSION` file at the root of the checkout preen was run from, which
+  it finds by resolving the symlink `install.sh` puts on your `PATH`. A checkout
+  whose `VERSION` cannot be read answers `preen unknown` and still exits 0: the
+  version is what you ask for when something is wrong, so it is the one question
+  that must not fail.
 - **CI runs the test suite on macOS as well as Linux** (#23, PR #26). macOS
   ships bash 3.2 and BSD `sort`, `find` and `awk`, and the file lists are built
   from exactly the constructs where those disagree with bash 5 and GNU. The

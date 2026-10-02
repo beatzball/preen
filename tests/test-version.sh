@@ -65,6 +65,23 @@ else
   printf '  NOTE: running as root, or no VERSION here, so the unreadable case is skipped\n'
 fi
 
+# ---- a VERSION with no final newline ----------------------------------------
+# git does not insist on one, so this file shape reaches a real checkout. `read`
+# returns non-zero at end of file with no terminator, having set the variable
+# anyway, so a gate on read's STATUS reports unknown while holding the answer.
+printf '%s' '9.9.9' > "$copy/VERSION"
+out="$("$copy/bin/preen" --version 2>&1)"; rc=$?
+assert_eq "$out" "preen 9.9.9" "a VERSION with no final newline is still reported"
+assert_eq "$rc" "0" "...and exits 0"
+
+# One line, not the file: `read` is what makes this the first line only, and a
+# $(cat) with its errors silenced is otherwise indistinguishable from it. The
+# release gate refuses a two-line VERSION; preen reports the number and says
+# nothing about the rest.
+printf '%s\n' '8.8.8' 'a stray second line' > "$copy/VERSION"
+out="$("$copy/bin/preen" --version 2>&1)"
+assert_eq "$out" "preen 8.8.8" "a VERSION with a stray second line reports the first line alone"
+
 # ---- reached through a symlink, the way install.sh leaves it ----------------
 # install.sh links $REPO/bin/preen into ~/.local/bin, so for everyone who
 # installed preen this is the ONLY path that runs. Without the symlink walk,

@@ -44,7 +44,20 @@ export PREEN_SELF="$SELF"
 # missing file fails at the `<` itself, so a trailing 2>/dev/null would print
 # "No such file or directory" past this line. Put first, it is already in place
 # when the open fails. This is bin/roost:76's line, and its reasoning.
-read -r PREEN_VERSION 2>/dev/null < "$PREEN_HOME/VERSION" || PREEN_VERSION=unknown
+#
+# The status of `read` is NOT the test, which is where roost's line is wrong.
+# read returns non-zero when it hits end of file without a terminator -- and it
+# has still set the variable. A VERSION written by `printf '%s' 0.1.0`, with no
+# final newline, is a file git is perfectly happy to carry, and `|| unknown` on
+# the status reported `unknown` for it while holding the right answer. So the
+# value is what decides, and an empty one is what falls back.
+#
+# `IFS= read -r`, so a leading space is kept rather than quietly trimmed: what
+# preen prints is then exactly what the file holds, which is what the release
+# gate is checking on the other side.
+PREEN_VERSION=""
+IFS= read -r PREEN_VERSION 2>/dev/null < "$PREEN_HOME/VERSION" || :
+[ -n "$PREEN_VERSION" ] || PREEN_VERSION=unknown
 
 die() { printf 'preen: %s\n' "$*" >&2; exit 1; }
 glow_major() { glow --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p'; }
