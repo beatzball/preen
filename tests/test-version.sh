@@ -123,8 +123,9 @@ fzfshim=""
 mktmpd fzfshim preen-cbshim
 cat > "$fzfshim/fzf" <<'SHIM'
 #!/usr/bin/env bash
-# Stand in for fzf: record what preen asked for, then run the --preview command
-# the way fzf runs it, so a path that needs quoting fails here as it would there.
+# Stand in for fzf: record every argument preen passed, then run the --preview
+# command the way fzf runs it, so a path that needs quoting fails here as it
+# would there.
 out="$PREEN_SHIM_OUT"
 printf '%s\n' "$@" > "$out.argv"
 preview=""
@@ -140,8 +141,15 @@ name="$(cat "$out.first")"
 q="'"
 cmd="${preview//\{\}/$q$name$q}"
 printf '%s\n' "$cmd" > "$out.cmd"
-${SHELL:-/bin/sh} -c "$cmd" > "$out.preview" 2>&1
+# TWO shells, because they do not agree about an unquoted variable. zsh does not
+# split one into words, and zsh is the login shell on macOS -- so a callback that
+# lost its inner quotes passes under zsh and dies under bash and sh. /bin/sh is
+# the strict one and is what this grades; $SHELL is run as well, because that is
+# the shell fzf will really use.
+/bin/sh -c "$cmd" > "$out.preview" 2>&1
 printf '%s\n' "$?" > "$out.rc"
+${SHELL:-/bin/sh} -c "$cmd" > "$out.preview.shell" 2>&1
+printf '%s\n' "$?" > "$out.rc.shell"
 exit 0
 SHIM
 chmod +x "$fzfshim/fzf"
@@ -151,14 +159,43 @@ cb="$box/callback"
     "$box/prefix/preen" diff >/dev/null 2>&1 )
 
 assert_eq "$(cat "$cb.rc" 2>/dev/null)" "0" \
-  "the preview callback runs from a checkout whose path holds a space"
+  "under /bin/sh, the preview callback runs from a checkout path holding a space"
 # Not just the exit status: a callback whose argument is mis-quoted also exits
 # 0, having rendered nothing. This is the diff preen was asked for.
 assert_contains "$(cat "$cb.preview" 2>/dev/null)" "a line this test can look for" \
   "...and renders the diff it was asked for"
-assert_not_contains "$(cat "$cb.cmd" 2>/dev/null)" "my code" \
-  "preen's own path is not pasted into the callback text"
+assert_eq "$(cat "$cb.rc.shell" 2>/dev/null)" "0" \
+  "and under this machine's own \$SHELL as well"
+
+# Every argument, not only the --preview one. preen builds four callbacks that
+# name its own path, and this file used to drive one of them: ctrl-s, and the
+# enter bind, could each go back to a pasted path with the suite still green.
+assert_not_contains "$(cat "$cb.argv" 2>/dev/null)" "my code" \
+  "no flag preen gives fzf carries its own path as text"
 rm -rf "$fzfshim" "$d"
+
+# ---- the fourth callback: enter inside worktrees mode -----------------------
+# bin/preen sets ENTER a second time for a worktree's file list, and nothing
+# above reaches it: the diff-mode run never gets to level two. preen_list_raw2
+# is the seam that does -- it accepts the first record, which drives preen into
+# the second list -- and list_flags is what can see a flag at all.
+#
+# PREEN is overridden for the call so the seam drives the spaced copy rather
+# than this checkout's own bin/preen.
+wtbox=""; wtraw=""
+mktmpd wtbox preen-wtbox
+wtd="$(new_repo)" || exit 1
+wt="$wtbox/feat"
+git -C "$wtd" worktree add -q -b feat "$wt" 2>/dev/null
+printf 'a change on the branch\n' >> "$wt/f.txt"
+mktmpf wtraw preen-wtlist
+PREEN="$box/prefix/preen" preen_list_raw2 "$wtraw" "$wtd" worktrees
+assert_nonempty "$(list_flags "$wtraw")" "the worktrees seam reached preen's second list"
+assert_not_contains "$(list_flags "$wtraw")" "my code" \
+  "...and no flag there carries preen's own path either"
+git -C "$wtd" worktree remove --force "$wt" 2>/dev/null || true
+rm -rf "$wtbox" "$wtd"
+rm -f "$wtraw" "$wtraw.argv" "$wtraw.level1" "$wtraw.n"
 
 # ---- bin reached through a directory symlink ---------------------------------
 # `cd -P`, not `cd`: a logical `..` from a linked bin/ climbs the link's parent

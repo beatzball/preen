@@ -215,6 +215,19 @@ project dated-tab $'1.2.3\n' "# Changelog
 gate check dated-tab
 assert_eq "$rc" "0" "a tab before the date still counts as the heading"
 
+# The other side of that rule: what follows the version has to be whitespace.
+# Without this, the whole space-or-tab test can be replaced by "accept anything
+# after the ]" and the suite stays green.
+project glued $'1.2.3\n' '# Changelog
+
+## [1.2.3]x
+
+- a heading with something stuck to the version
+'
+gate check glued
+assert_eq "$rc" "1" "text stuck straight onto the version is not that heading"
+assert_contains "$err" "## [1.2.3]" "...and the refusal names the heading it wanted"
+
 project trailing-space $'1.2.3\n' "# Changelog
 
 ## [1.2.3]   
