@@ -125,7 +125,9 @@ test('no prerendered route scrolls sideways on a phone', async ({ page }) => {
   for (const width of [320, 375]) {
     await page.setViewportSize({ width, height: 800 });
     for (const route of PRERENDERED_ROUTES) {
-      await page.goto(route);
+      // Wait for the client to draw the header. In dev the first measure can
+      // land before it has, and passes a page that is 397px wide once it does.
+      await page.goto(route, { waitUntil: 'networkidle' });
       const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
       expect(scrollWidth, `${route} is ${scrollWidth}px wide at ${width}px`).toBeLessThanOrEqual(width);
     }
