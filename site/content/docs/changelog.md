@@ -1,6 +1,7 @@
 ---
 title: Changelog
 description: Every released version of preen, what it added, and what it fixed.
+editUrl: https://github.com/beatzball/preen/edit/main/CHANGELOG.md
 sidebar:
   order: 8
 ---

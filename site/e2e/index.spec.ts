@@ -112,3 +112,36 @@ test('every prerendered route hydrates without a browser error', async ({ page }
   }
   expect(errors, 'the browser reported errors').toEqual([]);
 });
+
+/**
+ * The header row cannot wrap, so one link too many in `nav` makes every page
+ * scroll sideways on a phone -- and nothing else fails. A second top-nav link
+ * (Changelog) did exactly that: 433px of document in a 390px viewport, with
+ * the theme toggle off screen, while every other test here stayed green.
+ * 320px is the narrowest width the header budget in
+ * src/components/starlight-header.ts is written for.
+ */
+test('no prerendered route scrolls sideways on a phone', async ({ page }) => {
+  for (const width of [320, 375]) {
+    await page.setViewportSize({ width, height: 800 });
+    for (const route of PRERENDERED_ROUTES) {
+      await page.goto(route);
+      const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+      expect(scrollWidth, `${route} is ${scrollWidth}px wide at ${width}px`).toBeLessThanOrEqual(width);
+    }
+  }
+});
+
+/**
+ * content/docs/changelog.md is generated, and an edit to it fails
+ * `pnpm sync:check`. Its "Edit this page" link has to send a visitor to the
+ * source instead.
+ */
+test('the changelog edits CHANGELOG.md, not its generated page', async ({ page }) => {
+  await page.goto('/docs/changelog');
+  const edit = page.locator('a[href*="/edit/main/"]').first();
+  await expect(edit).toHaveAttribute('href', 'https://github.com/beatzball/preen/edit/main/CHANGELOG.md');
+  await page.goto('/docs/pipes');
+  await expect(page.locator('a[href*="/edit/main/"]').first())
+    .toHaveAttribute('href', 'https://github.com/beatzball/preen/edit/main/site/content/docs/pipes.md');
+});

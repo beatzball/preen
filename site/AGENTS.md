@@ -63,7 +63,9 @@ Read this before changing anything in `site/`.
 - **Do not edit `content/docs/changelog.md`.** It is generated from
   `CHANGELOG.md` at the repository root by `scripts/sync-changelog.mjs`, and
   committed, because the Docker build cannot see the root. Edit `CHANGELOG.md`,
-  then run `pnpm sync`. CI runs `pnpm sync:check`, which fails on drift.
+  then run `pnpm sync`. CI runs `pnpm sync:check`, which fails on drift. Its
+  `editUrl` frontmatter points "Edit this page" at `CHANGELOG.md`; any page
+  can set `editUrl` the same way.
 - **This site is for users. The repo `README.md` is for contributors.**
   Install and usage instructions belong here; recording the demo, the notes on
   why glow 3 is required, and anything else aimed at people hacking on preen

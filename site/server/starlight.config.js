@@ -6,10 +6,6 @@ export const siteConfig = {
   editUrlBase: 'https://github.com/beatzball/preen/edit/main/site/content/docs',
   nav: [
     { label: 'Docs', href: '/docs/getting-started' },
-    // A visitor deciding whether a tool is alive looks for this before they
-    // look at the docs. Generated from CHANGELOG.md -- see
-    // scripts/sync-changelog.mjs.
-    { label: 'Changelog', href: '/docs/changelog' },
     { label: 'GitHub', href: 'https://github.com/beatzball/preen' },
   ],
   sidebar: [

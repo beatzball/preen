@@ -5,7 +5,7 @@
 // The generated file is COMMITTED, not built. Coolify builds the image with
 // site/ as the Docker context (see the header of site/Dockerfile), so
 // ../CHANGELOG.md does not exist at build time -- generating it there would
-// work locally and produce an empty page in production.
+// work locally and fail the production build.
 //
 // Run `node scripts/sync-changelog.mjs` after editing CHANGELOG.md; CI runs
 // `--check`, which fails if the two have drifted.
@@ -21,6 +21,7 @@ const TARGET = join(here, '..', 'content', 'docs', 'changelog.md');
 const FRONTMATTER = `---
 title: Changelog
 description: Every released version of preen, what it added, and what it fixed.
+editUrl: https://github.com/beatzball/preen/edit/main/CHANGELOG.md
 sidebar:
   order: 8
 ---
@@ -31,13 +32,25 @@ sidebar:
 `;
 
 function render() {
-  const raw = readFileSync(SOURCE, 'utf8');
+  if (!existsSync(SOURCE)) {
+    console.error(`${SOURCE} does not exist, so there is nothing to publish.`);
+    process.exit(1);
+  }
+  // LF only, with no byte-order mark and no leading blank lines, so a
+  // checkout with core.autocrlf or an editor that writes a BOM produces the
+  // same page as everyone else, and the H1 below is the first thing seen.
+  const raw = readFileSync(SOURCE, 'utf8')
+    .replace(/\r\n?/g, '\n')
+    .replace(/^\uFEFF/, '')
+    .replace(/^\n+/, '');
 
   // Drop the source file's own "# Changelog" H1. The frontmatter title is
   // already rendered as the page's <h1>, and site/AGENTS.md forbids a second
   // one. Everything below it is already at ## or deeper, so nothing is
-  // demoted -- the heading levels come out right by deletion alone.
-  const body = raw.replace(/^#[^\n#][^\n]*\n/, '').replace(/^\n+/, '');
+  // demoted -- the heading levels come out right by deletion alone. CommonMark
+  // needs a space or tab after the #, so a first line like "#42 was fixed" is
+  // not a heading and stays.
+  const body = raw.replace(/^#[ \t][^\n]*(\n|$)/, '').replace(/^\n+/, '');
 
   return `${FRONTMATTER}\n${body.trimEnd()}\n`;
 }
@@ -50,9 +63,9 @@ function firstDifference(found, wanted) {
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     if (a[i] !== b[i]) {
       const show = (s) => (s === undefined ? '(end of file)' : JSON.stringify(s));
-      return `  first difference at line ${i + 1}:\n` +
-        `    page has:      ${show(a[i])}\n` +
-        `    CHANGELOG.md:  ${show(b[i])}`;
+      return `  first difference at line ${i + 1} of site/content/docs/changelog.md:\n` +
+        `    page has:   ${show(a[i])}\n` +
+        `    should be:  ${show(b[i])}`;
     }
   }
   return '';

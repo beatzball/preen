@@ -400,8 +400,8 @@ jobs:
       # content/docs/changelog.md is generated from CHANGELOG.md but COMMITTED
       # rather than built: Coolify builds the image with site/ as the Docker
       # context, so ../CHANGELOG.md is not there at build time. Generating it in
-      # the Dockerfile would work on a laptop and ship an empty changelog to
-      # production. This step is what stops the two drifting instead.
+      # the Dockerfile would work on a laptop and fail the production build.
+      # This step is what stops the two drifting instead.
       - name: Generated changelog page is in step with CHANGELOG.md
         run: pnpm sync:check
       - run: pnpm build
