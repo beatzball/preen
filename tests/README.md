@@ -64,7 +64,7 @@ green for the wrong reason.
 | `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
 | `test-width.sh` | the `-w` every render outside fzf asks glow for: the terminal's own width on a 66- and a 132-column pty, for a named file, the enter key and piped input; `COLUMNS` still winning; 80 with no terminal on any fd |
 
-## Seventeen bugs these exist to hold shut
+## Eighteen bugs these exist to hold shut
 
 Each was found by review, fixed, and is now covered. Reverting any one of the
 fixes turns this suite red:
@@ -138,6 +138,9 @@ fixes turns this suite red:
 - **preen's own state directory was unchecked too.** With an empty
   `$PREEN_STATE` it wrote `/kind`, `/mode` and `/rev` at the filesystem root and
   exited 0.
+- **Piped input had the same gap** (#33). With no temporary directory for the
+  stdin buffer, the buffer became `/input.md`: as root the input was written
+  there, left behind, and preen exited 0.
 - **`preen md` on a dash-leading directory found nothing.** `find -weird` read
   the name as options. The root gets a `./`, and the names keep it, because
   glow and `$EDITOR` would read the name as options in turn.

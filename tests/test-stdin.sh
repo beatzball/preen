@@ -99,6 +99,10 @@ code=$?
 assert_true $? "the stdin buffer's temporary directory is refused, so the guard is reached"
 assert_eq "$code" "1" "stdin with no temporary directory exits 1"
 assert_contains "$err" "no temporary directory" "and says why"
+# Exactly that, and nothing after it. A guard that only warns, or one placed
+# after the buffer is written, still says "no temporary directory" -- but then
+# goes on to fail on /input.md, and says so too.
+assert_eq "$err" "preen: no temporary directory under TMPDIR=${TMPDIR:-/tmp}" "and stops there: nothing else is said"
 [ ! -f "$nt/rendered" ]
 assert_true $? "and renders nothing"
 rm -rf "$nt"
