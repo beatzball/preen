@@ -91,6 +91,24 @@ falls back to that tool's official GitHub release tarball and drops the binary
 in the prefix — `~/.local/bin` unless you passed `--prefix`. **No sudo is
 needed for that fallback path.**
 
+### Updating
+
+preen runs straight from its git checkout: the `preen` on your `PATH` is a link
+into it. Updating is pulling that checkout:
+
+```sh
+git -C ~/.local/share/preen pull --ff-only
+```
+
+Running the install line again does the same, and also re-checks the tools and
+the config. If you installed with `--dir DIR`, pull `DIR` instead. If you cloned
+preen yourself, run `git pull` in that clone: `./install.sh` run from a checkout
+does not pull it.
+
+An update takes whatever is on `main`, which can be ahead of the latest release.
+`preen --version` says which version you have, and [the changelog](/docs/changelog) says what
+changed since.
+
 ### Uninstalling
 
 ```sh
