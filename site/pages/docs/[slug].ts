@@ -217,9 +217,15 @@ export const pageData = definePageData(async (event) => {
   const { prevDoc, nextDoc } = computePrevNext(siteConfig.sidebar, slug);
   const title = doc.title || slug;
   const description = doc.description || siteConfig.description;
-  const editUrl = siteConfig.editUrlBase
-    ? `${siteConfig.editUrlBase}/${slug}.md`
-    : null;
+  // A page may name its own edit target. The changelog does: it is generated
+  // from CHANGELOG.md at the repository root, and an edit to the generated
+  // file fails `pnpm sync:check` in CI.
+  const fmEdit = doc.frontmatter?.editUrl;
+  const editUrl = typeof fmEdit === 'string'
+    ? fmEdit
+    : siteConfig.editUrlBase
+      ? `${siteConfig.editUrlBase}/${slug}.md`
+      : null;
 
   return {
     // Only the title, not the whole doc. Returning `doc` sent doc.body (the

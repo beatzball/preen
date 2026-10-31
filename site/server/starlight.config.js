@@ -29,6 +29,7 @@ export const siteConfig = {
       items: [
         { label: 'Git Integration', slug: 'git-integration' },
         { label: 'Theming',         slug: 'theming' },
+        { label: 'Changelog',       slug: 'changelog' },
       ],
     },
   ],
