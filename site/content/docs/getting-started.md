@@ -105,7 +105,8 @@ the config. If you installed with `--dir DIR`, pull `DIR` instead. If you cloned
 preen yourself, run `git pull` in that clone: `./install.sh` run from a checkout
 does not pull it.
 
-An update takes whatever is on `main`, which can be ahead of the latest release.
+An update takes the newest commit on the branch the checkout follows — `main`,
+for a default install — which can be ahead of the latest release.
 `preen --version` says which version you have, and [the changelog](/docs/changelog) says what
 changed since.
 
