@@ -606,7 +606,14 @@ pager() {
 render_stdin() {
   # the buffer has to end in .md: glow 3 renders a file with any other
   # extension as plain text, so stdin markdown came out unstyled
-  PREEN_BUFDIR="$(mktemp -d "${TMPDIR:-/tmp}/preen-stdin.XXXXXX")"
+  #
+  # Checked like $PREEN_STATE below: an empty PREEN_BUFDIR makes the buffer
+  # /input.md, and as root the piped input is written there, left behind, and
+  # the render exits 0.
+  PREEN_BUFDIR="$(mktemp -d "${TMPDIR:-/tmp}/preen-stdin.XXXXXX" 2>/dev/null)" \
+    || PREEN_BUFDIR=""
+  [ -n "$PREEN_BUFDIR" ] && [ -d "$PREEN_BUFDIR" ] \
+    || die "no temporary directory under TMPDIR=${TMPDIR:-/tmp}"
   PREEN_BUF="$PREEN_BUFDIR/input.md"
   trap 'rm -rf "$PREEN_BUFDIR"' EXIT
   cat > "$PREEN_BUF"

@@ -105,6 +105,26 @@ mktmpf() {
   eval "$_v=\$_p"
 }
 
+tmp_refused_for() {
+  # tmp_refused_for <dir> <name> -> a stand-in mktemp in <dir> that fails <name>
+  #
+  # Put <dir> first on PATH. A template named <name> fails and leaves <dir>/asked
+  # behind, so a test can tell the failure was reached; every other template is
+  # passed to the real one. Here because this is the one file allowed to name it.
+  local _real
+  _real="$(command -v mktemp)"
+  cat > "$1/mktemp" <<EOF
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in
+    */$2.XXXXXX) : > "$1/asked"; exit 1 ;;
+  esac
+done
+exec "$_real" "\$@"
+EOF
+  chmod +x "$1/mktemp"
+}
+
 resolve_dir() {
   # resolve_dir <varname> -> rewrites <varname> as its physical path, or exits
   #
