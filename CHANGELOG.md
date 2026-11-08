@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **preening.dev has a changelog page** (#42, PR #47), generated from this
+  file. CI fails when the page drifts from it.
+- **The README and the docs say how to update preen.** Pull the checkout, or
+  run the install line again.
+
+### Fixed
+
+- **Piped input stops when there is no temporary directory** (#33, PR #46).
+  With an unusable `TMPDIR`, `preen -` used to write the input to `/input.md`
+  and, as root, leave it there and exit 0. It now says
+  `no temporary directory under TMPDIR=...` and exits 1.
+
 ## [0.1.0]
 
 The first numbered version. It does not try to describe everything preen does;
