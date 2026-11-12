@@ -64,9 +64,10 @@ that diff changes, the next list refresh clears the mark. Reopening the picker
 or returning from the editor refreshes the list. Markdown mode has no viewed
 marks.
 
-Review state lives under `${XDG_STATE_HOME:-$HOME/.local/state}/preen/`, outside
-the checkout. Set `XDG_STATE_HOME` to an absolute directory outside your
-repositories to choose another location. Removing this directory clears saved
+Review state lives in `preen/` under `$XDG_STATE_HOME`, or under
+`$HOME/.local/state` when that variable is unset or empty. It stays outside the
+checkout. Set `XDG_STATE_HOME` to an absolute directory outside your repositories
+to choose another location. Removing the `preen/` state directory clears saved
 review progress.
 
 ## `preen FILE.md` — render one file
