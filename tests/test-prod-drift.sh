@@ -89,8 +89,9 @@ assert_eq "$rc" "0" "a site/ change 30 minutes old is pending, not drift"
 assert_contains "$out" "pending" "...and says so"
 
 # The grace is measured from the OLDEST missing change: s2 is old, and a fresh
-# site change on top of it must not reset the clock.
-commit_at $((t0 + 7200 + 590 * 60)) site/index.md "fresh site change" >/dev/null
+# site change on top of it must not reset the clock. A different file, so two
+# files are outstanding with different ages and the oldest has to win.
+commit_at $((t0 + 7200 + 590 * 60)) site/new.md "fresh site change" >/dev/null
 serve "$b1"; check 600
 assert_eq "$rc" "1" "an old missed change still fails when a fresh one lands on top"
 git -C "$repo" reset -q --hard "$b2"
@@ -127,6 +128,25 @@ serve "$b2"; check 600
 assert_eq "$rc" "1" "an old change still missing fails, though another old one was reverted"
 assert_contains "$out" "The oldest, $(git -C "$repo" rev-parse --short "$r2")," \
   "...and names the one still missing, not the reverted one"
+git -C "$repo" reset -q --hard "$b2"
+
+# Real file names, not git's display form. By default git prints a non-ASCII
+# name quoted and octal-escaped, which matches no file; the old file then
+# dropped out of the age, and the fresh one made the miss look pending.
+u1=$(commit_at $((t0 + 7200 + 60 * 60)) "site/content/docs/caf$(printf '\303\251').md" "old accented page")
+commit_at $((t0 + 7200 + 590 * 60)) site/content/docs/fresh.md "fresh page" >/dev/null
+serve "$b2"; check 600
+assert_eq "$rc" "1" "an old missed change to a non-ASCII file name still fails under a fresh one"
+assert_contains "$out" "The oldest, $(git -C "$repo" rev-parse --short "$u1")," "...naming that change"
+git -C "$repo" reset -q --hard "$b2"
+
+# A name git quotes even then -- a double quote in it -- fails closed: the
+# run stops rather than leaving that file out of the age.
+commit_at $((t0 + 7200 + 60 * 60)) 'site/a"b.md' "old page, awkward name" >/dev/null
+commit_at $((t0 + 7200 + 590 * 60)) site/content/docs/fresh.md "fresh page" >/dev/null
+serve "$b2"; check 600
+assert_eq "$rc" "1" "a file name git still quotes fails closed, not pending"
+assert_contains "$out" "cannot read the history of" "...and says why"
 git -C "$repo" reset -q --hard "$b2"
 
 # ---- the checkout is older than production ----------------------------------

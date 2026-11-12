@@ -128,28 +128,39 @@ fi
 # the cost is a false alarm, never a missed one.
 #
 # Paths are read one per line from a here-doc so the loop runs in this shell
-# and its variables survive. A site/ file with a newline in its name would be
-# misread; there is none, and the build would not serve one.
+# and its variables survive. Two things keep each name the real one:
+#
+#   core.quotepath=false  git otherwise prints a name with a non-ASCII byte
+#                         as "site/caf\303\251.md", quotes and all, and that
+#                         string matches no file
+#   :(literal)            a name is a pathspec, where [ ] * ? are glob
+#                         characters; site/pages/docs/[slug].ts is real
+#
+# A name git still quotes (a double quote, backslash, tab or newline in it)
+# is the one case left, and it fails CLOSED below: a file whose history
+# cannot be read stops the run, rather than dropping out of the age and
+# letting a newer file make an old miss look pending.
 oldest_sha=""
 oldest_ct=""
 while IFS= read -r p; do
   [ -n "$p" ] || continue
   start=""
-  for c in $(git log --reverse --format=%H "$served..$head_sha" -- "$p"); do
-    if git diff --quiet "$served" "$c" -- "$p"; then
+  for c in $(git log --reverse --format=%H "$served..$head_sha" -- ":(literal)$p"); do
+    if git diff --quiet "$served" "$c" -- ":(literal)$p"; then
       start=""
     elif [ -z "$start" ]; then
       start=$c
     fi
   done
-  [ -n "$start" ] || continue
+  [ -n "$start" ] ||
+    err "cannot read the history of $p, so its age is unknown. Read the history by hand."
   ct=$(git log -1 --format=%ct "$start")
   if [ -z "$oldest_ct" ] || [ "$ct" -lt "$oldest_ct" ]; then
     oldest_sha=$start
     oldest_ct=$ct
   fi
 done <<EOF
-$(git diff --name-only --no-renames "$served" "$head_sha" -- site/)
+$(git -c core.quotepath=false diff --name-only --no-renames "$served" "$head_sha" -- site/)
 EOF
 [ -n "$oldest_sha" ] ||
   err "site/ differs between $served and $head_sha, but no commit between them touches site/. Read the history by hand."
