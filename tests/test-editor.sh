@@ -143,11 +143,18 @@ expect_args 'worktree committed changes use the recorded base' +37 "$open_path"
 cat > "$box/bin/fzf" <<'FZF'
 #!/usr/bin/env python3
 import os, shlex, subprocess, sys
-sys.stdin.buffer.read()
+raw = sys.stdin.buffer.read()
 bind = next(x for x in sys.argv if x.startswith('ctrl-e:execute('))
-command = bind[len('ctrl-e:execute('):-1]
-command = command.replace('{}', shlex.quote(os.environ['PREEN_EDIT_TEST_FILE']))
-command = command.replace('{1}', shlex.quote(os.environ['PREEN_EDIT_TEST_FILE']))
+command = bind[len('ctrl-e:execute('):]
+command = command.split(')+reload-sync(', 1)[0] if ')+reload-sync(' in command else command[:-1]
+file = os.environ['PREEN_EDIT_TEST_FILE']
+if '--review-file' in command:
+    record = next(r for r in raw.split(b'\0') if r.split(b'\x1f', 2)[-1] == os.fsencode(file))
+    selected = record.split(b'\x1f', 1)[0].decode()
+else:
+    selected = file
+command = command.replace('{}', shlex.quote(file))
+command = command.replace('{1}', shlex.quote(selected))
 sys.exit(subprocess.call(command, shell=True, executable='/bin/sh'))
 FZF
 chmod +x "$box/bin/fzf"
