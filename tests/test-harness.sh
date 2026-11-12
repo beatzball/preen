@@ -312,9 +312,15 @@ run_job() {
   # watched. Inside it they are new files, and the manifest reads new files as
   # damage: the first version of this put them in the copy and reported all 73
   # jobs DAMAGED, which is a false alarm, and a false alarm hides a real one.
+  #
+  # Only the clean run looks for raw calls. Tracing a call costs a `ps` per
+  # parent, preen alone calls mktemp hundreds of times across the jobs, and a
+  # job runs nothing the clean run of its file did not already run, up to the
+  # one call it fails.
   local f="$1" key="$2" nth="$3" slot="$4"
-  local pen="$box/s$slot" work="$box/s$slot/checkout" out="$box/out.$slot" rc
+  local pen="$box/s$slot" work="$box/s$slot/checkout" out="$box/out.$slot" rc raw=""
   rm -rf "$pen"; mkdir -p "$pen/tmp" "$pen/counts"; : > "$pen/raw"
+  [ "$key" = - ] && raw="$pen/raw"
   cp -R "$tmpl" "$work"
   # A TMPDIR that WORKS. The point is that mktemp fails at one call and nowhere
   # else, so the run gets that far. Breaking TMPDIR outright is what the first
@@ -322,7 +328,7 @@ run_job() {
   ( cd "$work/tests" \
       && TMPDIR="$pen/tmp" PREEN_MKTEMP_COUNTS="$pen/counts" \
          PREEN_MKTEMP_FAIL_SITE="$key" PREEN_MKTEMP_FAIL_NTH="$nth" \
-         PREEN_MKTEMP_FIRED="$pen/fired" PREEN_MKTEMP_RAW="$pen/raw" \
+         PREEN_MKTEMP_FIRED="$pen/fired" PREEN_MKTEMP_RAW="$raw" \
          PATH="$shim:$PATH" bash "$f" </dev/null >/dev/null 2>&1 )
   rc=$?
   if [ "$(manifest "$work")" != "$tmpl_manifest" ]; then
@@ -346,36 +352,50 @@ run_job() {
   rm -rf "$pen"
 }
 
-# Batched rather than one at a time: every run is independent. bash 3.2 has no
-# `wait -n`, so a full batch is waited on before the next starts.
+# $width runs at a time, and a new one starts the moment any slot is free. bash
+# 3.2 has no `wait -n`, so each run leaves a free.<slot> marker when it ends and
+# the loop looks for one. Waiting for a whole batch instead left three slots idle
+# behind every slow file, and the clean runs are nothing but slow files.
 width="${PREEN_HARNESS_JOBS:-4}"
 
 sweep() {
   # sweep <job list> -> runs every "file key nth" line; sets bad, done_n, reached
-  local slot=0 f key nth
+  local f key nth s slot
   bad=""; done_n=0; reached=0
+  s=0; while [ "$s" -lt "$width" ]; do : > "$box/free.$s"; s=$((s + 1)); done
   while IFS=' ' read -r f key nth; do
     [ -n "$f" ] || continue
-    run_job "$f" "$key" "${nth:-1}" "$slot" &
-    slot=$((slot + 1))
-    if [ "$slot" -ge "$width" ]; then wait; collect "$slot"; slot=0; fi
+    slot=""
+    while [ -z "$slot" ]; do
+      s=0
+      while [ "$s" -lt "$width" ]; do
+        if [ -f "$box/free.$s" ]; then slot="$s"; break; fi
+        s=$((s + 1))
+      done
+      [ -n "$slot" ] || sleep 0.1
+    done
+    rm -f "$box/free.$slot"
+    collect "$slot"
+    { run_job "$f" "$key" "${nth:-1}" "$slot"; : > "$box/free.$slot"; } &
   done < "$1"
-  if [ "$slot" -gt 0 ]; then wait; collect "$slot"; fi
+  wait
+  s=0; while [ "$s" -lt "$width" ]; do collect "$s"; s=$((s + 1)); done
 }
 
 collect() {
-  # collect <slots-used> -> fold this batch's verdicts into the totals
-  local n="$1" i=0 v
-  while [ "$i" -lt "$n" ]; do
-    v="$(cat "$box/out.$i" 2>/dev/null || echo "MISSING slot $i")"
-    rm -f "$box/out.$i"
-    case "$v" in
-      ok*) reached=$((reached + 1)) ;;
-      *)   bad="$bad
+  # collect <slot> -> fold the verdict that slot left, if any, into the totals
+  #
+  # A run that died without writing one is not counted, so done_n comes up
+  # short and "every job reported back" says so.
+  local v
+  [ -f "$box/out.$1" ] || return 0
+  v="$(cat "$box/out.$1")"; rm -f "$box/out.$1"
+  case "$v" in
+    ok*) reached=$((reached + 1)) ;;
+    *)   bad="$bad
   $v" ;;
-    esac
-    done_n=$((done_n + 1)); i=$((i + 1))
-  done
+  esac
+  done_n=$((done_n + 1))
 }
 
 # The clean runs, one per file.
