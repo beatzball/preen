@@ -27,8 +27,9 @@ preen's picker is `fzf`, which cannot be driven headlessly. Four seams get at
 everything that matters without it:
 
 - **The file list.** `preen_list` puts a fake `fzf` first on `PATH` that writes
-  its stdin out and exits. What that captures is exactly the list the real
-  picker would have been handed.
+  its stdin out and exits. The `.records` capture holds the exact bytes handed to fzf. For review
+  pickers, the path field is also decoded into the ordinary capture; list tests
+  assert on those original bytes while the viewed tests drive the ID callbacks.
 - **The previews.** `preview` calls `preen --preview`, which is the same
   callback fzf itself invokes, with the same `$PREEN_STATE` contract.
 - **The flags and the second level.** The same shim records the arguments preen
@@ -63,6 +64,7 @@ green for the wrong reason.
 | `test-pr.sh` | four `gh` calls whatever the file count, previews slice the cache, read-only |
 | `test-editor.sh` | `ctrl-e` dispatch and NUL-recorded editor arguments: first hunk, known and unknown editors, rejected jumps, staged and unstaged changes, REV, initial commits, additions, deletions, binary files, Markdown, cached PR slices, and odd worktree paths |
 | `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
+| `test-viewed.sh` | the actual viewed binding and reload callbacks: mark/unmark, persistence, content invalidation (including binary and untracked files), unusual filenames, separate repo/revision/PR/worktree targets, read-only checkouts, and state-location guards |
 | `test-layout.sh` | the starting layout (#8): `PREEN_LAYOUT` beats the repository's `preen.layout`, which beats the global one, which beats side-by-side — for the picker's state file, its previews, `ctrl-s` after start, and piped input. Only the exact word `inline` counts; outside a repository the global value still applies, and neither that nor a config git cannot read (md mode outside a repository, and piped input) prints anything |
 | `test-width.sh` | the `-w` every render outside fzf asks glow for: the terminal's own width on a 66- and a 132-column pty, for a named file, the enter key and piped input; `COLUMNS` still winning; 80 with no terminal on any fd |
 | `test-prod-drift.sh` | `scripts/check-prod-drift.sh`, the scheduled check that production serves main's `site/`: passes when production lags `main` only by non-site commits, fails on a missed site change past the grace period, measures that grace from the oldest missed change, and fails on a commit not on `main` or a `version.json` with no commit (#40, #43) |

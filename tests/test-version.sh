@@ -153,10 +153,12 @@ for a in "$@"; do
 done
 tr '\0' '\n' | head -n 1 > "$out.first"
 name="$(cat "$out.first")"
+case "$preview" in *--review-file*) name="${name%%$'\037'*}" ;; esac
 # fzf single-quotes the selection itself; that is the one part of fzf rebuilt
 # here. q holds one single quote, which is awkward to write inline.
 q="'"
 cmd="${preview//\{\}/$q$name$q}"
+cmd="${cmd//\{1\}/$q$name$q}"
 printf '%s\n' "$cmd" > "$out.cmd"
 # TWO shells, because they do not agree about an unquoted variable. zsh does not
 # split one into words, and zsh is the login shell on macOS -- so a callback that
@@ -212,7 +214,8 @@ assert_not_contains "$(list_flags "$wtraw")" "my code" \
   "...and no flag there carries preen's own path either"
 git -C "$wtd" worktree remove --force "$wt" 2>/dev/null || true
 rm -rf "$wtbox" "$wtd"
-rm -f "$wtraw" "$wtraw.argv" "$wtraw.level1" "$wtraw.n"
+rm -f "$wtraw" "$wtraw.argv" "$wtraw.records" "$wtraw.level1" "$wtraw.n"
+rm -rf "$wtraw.state"
 
 # ---- bin reached through a directory symlink ---------------------------------
 # `cd -P`, not `cd`: a logical `..` from a linked bin/ climbs the link's parent

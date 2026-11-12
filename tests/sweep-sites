@@ -69,6 +69,10 @@ test-version.sh preen-test+new_repo
 test-version.sh preen-version
 test-version.sh preen-wtbox
 test-version.sh preen-wtlist
+test-viewed.sh preen-dep+source
+test-viewed.sh preen-test+new_repo
+test-viewed.sh preen-viewed
+test-viewed.sh preen-viewed-shim
 test-width.sh preen-dep+source
 test-width.sh preen-state+preen_state
 test-width.sh preen-width

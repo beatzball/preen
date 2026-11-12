@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - **`ctrl-e` opens at the first diff hunk** (#55) in recognized editors,
   using the same comparison as the preview. Unknown editors and Markdown
   still open plainly; PR mode opens your local copy of the file.
+- **`ctrl-v` marks a file as viewed** in diff, PR, and worktree reviews (#51).
+  Marks and a viewed count survive restarting the same review, and a changed
+  diff clears its mark. Review progress is stored under `XDG_STATE_HOME/preen`,
+  outside the checkout.
 
 ## [0.2.0]
 

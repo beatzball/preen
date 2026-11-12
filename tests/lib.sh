@@ -262,7 +262,7 @@ snapshot() {
 
 preen_list_raw() {
   # preen_list_raw <outfile> <cwd> <preen args...>
-  #   -> the exact bytes preen hands fzf, written to <outfile>
+  #   -> NUL-framed path fields in <outfile>, exact transport in <outfile>.records
   #
   # A file, not a string, because the list is NUL-delimited and a filename may
   # contain a newline: bash cannot hold a NUL, and "$(...)" would drop the
@@ -277,7 +277,12 @@ preen_list_raw() {
   cat > "$shim/fzf" <<EOF
 #!/bin/sh
 printf '%s\n' "\$@" > "$out.argv"
-cat > "$out"
+cat > "$out.records"
+if [ -d "\$PREEN_STATE/paths" ] && [ "\$(cat "\$PREEN_STATE/kind")" != wt ]; then
+  python3 "$PREEN_ROOT/tests/picker-paths.py" < "$out.records" > "$out"
+else
+  cp "$out.records" "$out"
+fi
 exit 0
 EOF
   chmod +x "$shim/fzf"
@@ -302,7 +307,7 @@ preen_list_raw2() {
   local shim
   [ -n "$out" ] || { printf '  FAIL: preen_list_raw2 was given no outfile\n'; return 1; }
   mktmpd shim preen-shim2
-  : > "$out"; : > "$out.argv"; rm -f "$out.n"
+  : > "$out"; : > "$out.argv"; rm -f "$out.n"; rm -rf "$out.state"
   cat > "$shim/fzf" <<EOF
 #!/bin/sh
 n=\$(cat "$out.n" 2>/dev/null || echo 0)
@@ -316,7 +321,13 @@ case "\$n" in
      #  written out would be expanded by the test shell and tripped by set -u.)
      tr '\0' '\n' < "$out.level1" | head -n 1 ;;
   2) printf '%s\n' "\$@" > "$out.argv"
-     cat > "$out" ;;
+     cat > "$out.records"
+     if [ -d "\$PREEN_STATE/paths" ]; then
+       python3 "$PREEN_ROOT/tests/picker-paths.py" < "$out.records" > "$out"
+       cp -R "\$PREEN_STATE" "$out.state"
+     else
+       cp "$out.records" "$out"
+     fi ;;
   *) cat > /dev/null ;;
 esac
 exit 0
@@ -350,7 +361,7 @@ preen_list() {
   local raw; mktmpf raw preen-list
   preen_list_raw "$raw" "$cwd" "$@"
   tr '\0' '\n' < "$raw"
-  rm -f "$raw" "$raw.argv"       # the recorded flags go with it
+  rm -f "$raw" "$raw.argv" "$raw.records"       # captured transport goes with it
 }
 
 # ---- asking a NUL-delimited list about one name -----------------------------
