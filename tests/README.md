@@ -55,7 +55,7 @@ green for the wrong reason.
 
 | file | covers |
 |---|---|
-| `test-harness.sh` | the harness itself: the shapes that caused the damage are forbidden at the source in any spelling, the guards are called directly, and the first use of every template name in every file is failed in turn while the checkout is watched. The slow half of the suite — see below |
+| `test-harness.sh` | the harness itself: the shapes that caused the damage are forbidden at the source in any spelling, the guards are called directly, and every path to `mktemp` that a clean run of each file takes is failed in turn while the checkout is watched; a call that skips the helpers fails the run. The slow half of the suite — see below |
 | `test-diff-list.sh` | the list from the root and from a subdirectory, a revision argument, a repo with no commit, staged and unstaged together |
 | `test-worktrees.sh` | the count agrees with the level-one preview, merge-base rather than the branch tip, the main checkout is excluded, read-only, the pre-2.36 fallback, and the two kinds of worktree it has to drop — one git cannot spell and one that was deleted without a prune — each with the reason it is allowed to give |
 | `test-stdin.sh` | the diff/markdown sniff, including `---` alone staying markdown and a `--color=always` diff still reading as a diff; a failed `mktemp` for the buffer stops with a reason instead of writing `/input.md` (#33) |
@@ -66,7 +66,7 @@ green for the wrong reason.
 | `test-width.sh` | the `-w` every render outside fzf asks glow for: the terminal's own width on a 66- and a 132-column pty, for a named file, the enter key and piped input; `COLUMNS` still winning; 80 with no terminal on any fd |
 | `test-prod-drift.sh` | `scripts/check-prod-drift.sh`, the scheduled check that production serves main's `site/`: passes when production lags `main` only by non-site commits, fails on a missed site change past the grace period, measures that grace from the oldest missed change, and fails on a commit not on `main` or a `version.json` with no commit (#40, #43) |
 
-## Eighteen bugs these exist to hold shut
+## Nineteen bugs these exist to hold shut
 
 Each was found by review, fixed, and is now covered. Reverting any one of the
 fixes turns this suite red:
@@ -137,6 +137,15 @@ fixes turns this suite red:
   ``x=`new_repo` `` all walked past. The rules match the word `mktemp`, any
   `&& pwd`, and both capture forms now, and the sweep fails the Nth use rather
   than all of them.
+- **And then it still passed when the bug moved into `lib.sh`** (#34). The sweep
+  found its jobs by grepping for template names, and `lib.sh` was exempt from
+  every source rule. So a nameless `d="$(mktemp -d)"` in `new_repo` — the
+  round-2 bug again — had no name, lost its jobs without a word, and passed at
+  205 of 205; a second helper sharing `preen-test` was never reached, because
+  the first use of the name killed the file. The sweep is built from clean runs
+  now and keyed on the functions that asked, a call that skips the helpers fails
+  wherever it is, `lib.sh` is under the rules by function, and the job list is
+  pinned in `tests/sweep-sites`.
 - **preen's own state directory was unchecked too.** With an empty
   `$PREEN_STATE` it wrote `/kind`, `/mode` and `/rev` at the filesystem root and
   exited 0.
@@ -156,42 +165,82 @@ fixes turns this suite red:
 `tests/test-harness.sh` is the only file here that grades the suite rather than
 preen, and it is in three parts because they hold different things:
 
-- **the shapes, at the source.** No test may build a path with a bare `mktemp`,
-  every `$(new_repo)` and `$(preen_state …)` must carry `|| exit 1`, and nothing
-  may resolve a path with `cd "$x" && pwd`. These are greps. A new unguarded site
-  is a source edit, and this is what refuses it the moment it is written.
+- **the shapes, at the source.** Nothing may name `mktemp` outside `mktmpd`,
+  `mktmpf` and `tmp_refused_for`, every `$(new_repo)` and `$(preen_state …)`
+  must carry `|| exit 1`, no test may redefine a function `lib.sh` defines (in either of bash's
+  spellings), and
+  nothing may resolve a path with `cd "$x" && pwd` outside `resolve_dir`. These are greps over every file but the harness
+  itself — `lib.sh` included, by function, so a helper of its own is graded like
+  a test. A new unguarded site is a source edit, and this is what refuses it the
+  moment it is written.
 - **the guards, called directly.** `mktmpd`, `mktmpf` and `resolve_dir` must exit
   rather than hand back an empty string, and say what they could not get.
-- **the first use of every template name, end to end.** One run per job, with
-  `mktemp` failing at ONE use of one name and nowhere else so the run reaches it,
-  against a throwaway copy of the checkout that is watched for deleted files,
-  staged changes and new commits.
+- **every path to `mktemp`, end to end.** Each file is run once with nothing
+  failing, under a stand-in `mktemp` that records every call. Then one run per
+  job, with `mktemp` failing at ONE call and nowhere else so the run reaches
+  it, against a throwaway copy of the checkout that is watched for deleted
+  files, staged changes and new commits.
 
-The sweep is keyed on the template NAME and the Nth use of it, never on a call
-index: an index moves with the environment, since a git hook that calls `mktemp`
-shifts every number after it. It reads raw `mktemp` templates as well as guarded
-calls, so a site reverted to a raw call stays under the sweep instead of quietly
-leaving it.
+The sweep is built from those clean runs, not from reading the source. `mktmpd`
+and `mktmpf` tell the stand-in which call they are making: the template name and
+the functions that asked for it, innermost first — `preen-test+new_repo`, or
+`preen-shim+preen_list_raw+preen_list`. A job is one such key and the Nth use of
+it, never a call index: an index moves with the environment, since a git hook
+that calls `mktemp` shifts every number after it.
 
-**What it covers, exactly.** By default the FIRST use of every name in every
-file — about 55 jobs against roughly 210 real `mktemp` calls, because names like
-`preen-test` and `preen-shim` are used many times over. The deeper uses of a
-shared name are not swept by default; the rule in part 1 is what covers them, by
-leaving no raw `mktemp` anywhere outside `lib.sh` for an unchecked path to come
-from. `PREEN_HARNESS_DEPTH=full` sweeps every use of every name instead, which
-costs a dry run per file plus one job per use and takes several minutes.
+A call that arrives without a key did not come through the helpers. The stand-in
+walks up its parent processes to see whose it is: preen's own calls and git's are
+let through, and anything else — a nameless `mktemp -d` in `new_repo`, a raw
+call however it is spelled — fails the run.
 
-Every job also reports whether its failure actually **fired**. Without that a
-job whose file died earlier comes back green having graded nothing, which is how
-two earlier versions of this file looked healthy while holding almost nothing.
-The run prints how many of its jobs fired, and fails if that count collapses.
+**What it covers, exactly.** The clean runs use a copy of the whole checkout —
+everything git tracks, and new files not yet added — so a test that branches on
+`VERSION` or `scripts/` takes the same branch it takes in your checkout. A clean
+run must finish with exit 0 and no `FAIL` line, or the calls it counted are only
+the ones it got to.
 
-It is the slow half of the suite — more than all the other files together: about
-55 runs of real fixture work, four at a time, which takes the whole suite from
-roughly 30s to two and a half minutes. `PREEN_HARNESS_JOBS=8 tests/run.sh`
-widens the batch if the machine has the cores. On a loaded machine the whole
-suite can take several minutes, which is worth knowing before putting it behind
-a short timeout.
+Then, by default:
+
+- a key made only of `new_repo` and `preen_state`, such as
+  `preen-test+new_repo`, is failed at its FIRST use in each file. The body is
+  the same at every call; what differs is the caller, and part 1 holds every
+  caller of those two: each capture carries `|| exit 1`, and no test may
+  redefine a function `lib.sh` defines. Part 1 and part 3 read the same list.
+- any other key — another `lib.sh` helper, a test's own function anywhere in
+  the chain, or a call at a test's top level — is failed at EVERY use. Its
+  callers are lines no rule reads, and one guarded call must not pass for an
+  unguarded one later in the file.
+
+That is 130 jobs today, out of 138 helper calls in a clean pass. A test's own
+function named `main` or `source` is a frame like any other: only bash's own
+`main` frame is dropped from a key, and it is told apart by being called from
+line 0 outside `bash -c`, not by its name. A call made while `lib.sh` is being sourced reads
+`preen-dep+source`. `PREEN_HARNESS_DEPTH=full`
+fails every use of every key, `lib.sh`'s helpers included, at one job per call.
+
+`tests/sweep-sites` pins the set of keys, one line per file and key. The sweep
+must produce exactly that set: a key that stops existing fails the run instead
+of quietly shrinking it, and a new one fails until its line is added, so the
+review sees which call paths came or went. The failure prints the lines to add
+or remove.
+
+Every job also reports whether its failure actually **fired**, and one that did
+not fails the run. Without that a job whose file died earlier comes back green
+having graded nothing, which is how two earlier versions of this file looked
+healthy while holding almost nothing.
+
+What it does not see, on purpose: a stub script a test writes is let through
+like preen, because it runs in a fixture under `$TMPDIR`, not in the checkout;
+and a call that sets `PREEN_MKTEMP_VIA` itself is taken at its word. Neither is
+a slip anyone makes by accident.
+
+It is the slow half of the suite — more than all the other files together: one
+clean run per file and then 130 jobs of real fixture work, four at a time. The whole
+suite took a little over four minutes on a laptop that was busy with other
+work, and a sweep alone has taken more than six on a busier one, so it is not
+something to put behind a short timeout.
+`PREEN_HARNESS_JOBS=8 tests/run.sh` runs eight at a time if the machine has the
+cores, and `tests/run.sh NAME` runs one file without the sweep while you work.
 
 ## Writing a new one
 

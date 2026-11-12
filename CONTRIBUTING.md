@@ -10,6 +10,16 @@ bash -n bin/preen     # catches an unclosed quote or a broken heredoc
 tests/run.sh          # the behavior suite
 ```
 
+`tests/run.sh` is not quick. Most of its time is `test-harness.sh`, which runs
+every other test file again, dozens of times, with `mktemp` failing at a
+different call each time, to prove the suite cannot damage your checkout. The
+whole run took a little over four minutes on a busy laptop, and a sweep
+alone has taken more than six on a busier one. While you work, run only the files you are changing —
+`tests/run.sh worktrees` runs every file whose name contains `worktrees` — and
+run the whole suite once before you open the pull request.
+`PREEN_HARNESS_JOBS=8 tests/run.sh` runs eight sweep jobs at a time instead of
+four, if the machine has the cores.
+
 Both run in CI, along with a site build and a real Docker image probe. Green
 locally is not the same as green in CI — the runner has no glow and no
 terminal, which is exactly where the interesting failures live.

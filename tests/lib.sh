@@ -83,16 +83,56 @@ assert_nonempty() {
 # take the NAME of a variable and set it, rather than printing: a function whose
 # output is captured with $(...) runs in a subshell, where `exit` ends only the
 # subshell and the caller carries on with the empty string that started this.
+#
+# The FAIL line goes to stdout so run.sh counts it. Inside a `$(helper)` capture
+# that also means the caller's variable holds the FAIL text rather than an empty
+# string, so `git -C "$x"` fails instead of acting on the checkout. That is
+# luck, not a guard: a helper that sends its own output to /dev/null hands back
+# an empty string, and only `|| exit 1` and the sweep stand behind it.
 _preen_tmpfail() {
   printf '  FAIL: no temporary %s under TMPDIR=%s\n' "$1" "${TMPDIR:-/tmp}"
   printf 'RUNNER: refusing to continue — an empty path here reaches rm -rf, cd and git -C\n' >&2
   exit 1
 }
 
+# The sweep in test-harness.sh fails one call at a time, and it has to know which
+# call it is looking at. The template name alone is not enough: new_repo and a
+# quiet helper of a test's own can share `preen-test`, and failing the first use
+# of the name never reaches the second caller. So every call says which
+# functions asked for it, innermost first: `preen-test+new_repo`, or
+# `preen-test+quiet_repo+setup`. The stand-in mktemp keys on that, and a call
+# that arrives WITHOUT it did not come through these helpers, which the sweep
+# reports as a raw mktemp. Outside the sweep nothing reads it.
+#
+# FUNCNAME is [0] this, [1] mktmpd or mktmpf, then the callers, and in a script
+# file bash's own `main` frame last. Only that frame is dropped, and never by
+# its name alone: dropping by NAME let a test's own function called `main` share
+# the bare top-level key, so its calls were never failed on their own.
+#
+# bash's own frame exists only when bash runs a script FILE, and it is "called"
+# from line 0. Under `bash -c` there is no such frame, so a last `main` is the
+# test's — and bash 3.2 also reports line 0 for it on a one-line command string,
+# so the line alone is not proof. BASH_EXECUTION_STRING is set exactly under
+# `bash -c`, which settles it. Under `bash -s` a user `main` has a real line.
+# Checked on bash 3.2.57 and 5.2.21. A `source` frame always stays, so a call
+# made while lib.sh is being sourced reads `preen-dep+source`.
+_preen_tmp_via() {
+  local _i=2 _n=${#FUNCNAME[@]}
+  _preen_via="$1"
+  if [ "${FUNCNAME[_n-1]}" = main ] && [ "${BASH_LINENO[_n-1]}" = 0 ] \
+     && [ -z "${BASH_EXECUTION_STRING+set}" ]; then
+    _n=$((_n - 1))
+  fi
+  while [ "$_i" -lt "$_n" ]; do
+    _preen_via="$_preen_via+${FUNCNAME[_i]}"; _i=$((_i + 1))
+  done
+}
+
 mktmpd() {
   # mktmpd <varname> <name> -> sets <varname> to a fresh directory, or exits
   local _v="$1" _p
-  _p="$(mktemp -d "${TMPDIR:-/tmp}/$2.XXXXXX" 2>/dev/null)" || _p=""
+  _preen_tmp_via "$2"
+  _p="$(PREEN_MKTEMP_VIA="$_preen_via" mktemp -d "${TMPDIR:-/tmp}/$2.XXXXXX" 2>/dev/null)" || _p=""
   [ -n "$_p" ] && [ -d "$_p" ] || _preen_tmpfail "directory ($2)"
   eval "$_v=\$_p"
 }
@@ -100,7 +140,8 @@ mktmpd() {
 mktmpf() {
   # mktmpf <varname> <name> -> sets <varname> to a fresh file, or exits
   local _v="$1" _p
-  _p="$(mktemp "${TMPDIR:-/tmp}/$2.XXXXXX" 2>/dev/null)" || _p=""
+  _preen_tmp_via "$2"
+  _p="$(PREEN_MKTEMP_VIA="$_preen_via" mktemp "${TMPDIR:-/tmp}/$2.XXXXXX" 2>/dev/null)" || _p=""
   [ -n "$_p" ] && [ -f "$_p" ] || _preen_tmpfail "file ($2)"
   eval "$_v=\$_p"
 }
