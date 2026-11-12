@@ -88,24 +88,49 @@ The installer moves that key for you if it finds it — see
 
 ## Starting in inline
 
+To make one repository always start inline, run this inside it:
+
+```sh
+git config preen.layout inline
+```
+
+To make every repository start inline, set it globally:
+
+```sh
+git config --global preen.layout inline
+```
+
+preen asks git for the key, and git looks in the repository first, then in
+your global file, then in the system file. So a repository's own value beats
+the global one, and the global one still applies when you run preen outside
+any repository.
+
+For a single run, the environment variable beats both:
+
 ```sh
 PREEN_LAYOUT=inline preen diff
+PREEN_LAYOUT=sbs preen diff        # side-by-side, whatever git config says
 PREEN_LAYOUT=inline git diff | preen
 ```
 
-`PREEN_LAYOUT=inline` starts every mode in inline layout, including the
-[piped path](/docs/pipes), which has no `ctrl-s` to press. Any other value, or
-no value, means side-by-side.
+The order, first match wins:
 
-Set it in your shell startup file if you always want inline:
+1. `PREEN_LAYOUT`, if it is set and not empty
+2. `git config preen.layout`
+3. side-by-side
+
+The layout applies to every mode, including the [piped path](/docs/pipes),
+which has no `ctrl-s` to press. Only the exact word `inline` means inline. Any
+other value — `INLINE`, a typo, `sbs` — means side-by-side, and preen does not
+warn about it. If git cannot read your config file, preen starts side-by-side
+and does not print git's error.
+
+To undo it:
 
 ```sh
-export PREEN_LAYOUT=inline
+git config --unset preen.layout
+git config --global --unset preen.layout
 ```
-
-**This is the only way to do it today.** A per-repository
-`git config preen.layout inline` is a planned follow-up and is **not
-implemented** — setting that key does nothing at all.
 
 ## Every environment variable
 
@@ -114,7 +139,7 @@ Read by `preen` itself:
 | variable | effect |
 |---|---|
 | `PREEN_GLOW_STYLE` | path to a glow style file (default `~/.config/glow/roost.json`) |
-| `PREEN_LAYOUT` | `inline` to start inline; anything else is side-by-side |
+| `PREEN_LAYOUT` | `inline` to start inline; any other value is side-by-side. Beats `git config preen.layout` |
 | `EDITOR` | what `ctrl-e` opens (default `vi`) |
 | `TMPDIR` | where the scratch directory for a run is made (default `/tmp`) |
 

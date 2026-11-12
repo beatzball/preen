@@ -178,7 +178,8 @@ whatever is in the pane beside it, while copy mode selects within the pane.
 Into a pipe or a file there is no pager, and the output keeps its color codes:
 `less -R out.txt` shows them as color, but a paste shows them as text. To copy
 a file's text, copy the file itself: `pbcopy < NOTES.md`.
-`PREEN_LAYOUT=inline` applies here too.
+The starting layout (`PREEN_LAYOUT`, then `git config preen.layout`) applies
+here too.
 
 ### Git integration
 
@@ -216,9 +217,11 @@ Both renderers use the roost palette (`#7c6ff0` purple, `#c8c3e0` text, `#8a84b0
 
 - **glow**: `~/.config/glow/roost.json`. Override with `PREEN_GLOW_STYLE=/path/to/style.json`.
 - **delta**: the `[delta]` section of `~/.gitconfig`, syntax theme `Dracula`.
-- Start in inline layout with `PREEN_LAYOUT=inline preen diff`. This is the only
-  way to do it today. A per-repo `git config preen.layout inline` is a planned
-  follow-up and is **not implemented yet**, so setting that key does nothing.
+- Start in inline layout with `git config preen.layout inline` (one repo) or
+  `git config --global preen.layout inline` (every repo). `PREEN_LAYOUT=inline`
+  or `PREEN_LAYOUT=sbs` beats both for one run. Only `inline` means inline; any
+  other value is side-by-side. `layout_mode()` in `bin/preen` is the one place
+  that decides.
 
 The diff layout lives in two named delta features so `preen` can flip between them:
 

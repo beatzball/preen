@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`git config preen.layout inline` starts preen inline** (#8, PR #PR). Set
+  it in one repository, or with `--global` for every one. `PREEN_LAYOUT` still
+  wins for a single run. The docs used to say this key did nothing.
+
 ## [0.1.1]
 
 ### Added
