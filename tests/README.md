@@ -64,6 +64,7 @@ green for the wrong reason.
 | `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
 | `test-layout.sh` | the starting layout (#8): `PREEN_LAYOUT` beats the repository's `preen.layout`, which beats the global one, which beats side-by-side — for the picker's state file, its previews, `ctrl-s` after start, and piped input. Only the exact word `inline` counts; outside a repository the global value still applies, and neither that nor a config git cannot read (md mode outside a repository, and piped input) prints anything |
 | `test-width.sh` | the `-w` every render outside fzf asks glow for: the terminal's own width on a 66- and a 132-column pty, for a named file, the enter key and piped input; `COLUMNS` still winning; 80 with no terminal on any fd |
+| `test-prod-drift.sh` | `scripts/check-prod-drift.sh`, the scheduled check that production serves main's `site/`: passes when production lags `main` only by non-site commits, fails on a missed site change past the grace period, measures that grace from the oldest missed change, and fails on a commit not on `main` or a `version.json` with no commit (#40, #43) |
 
 ## Eighteen bugs these exist to hold shut
 

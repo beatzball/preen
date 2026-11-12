@@ -1,0 +1,68 @@
+name: prod-drift
+
+# Is production serving the site that main has? (#40, #43)
+#
+# ci.yml deploys only from a push to main that changed site/, and only when
+# shell, site and smoke-image all passed. When one of those fails for a reason
+# that has nothing to do with the change -- #40 was a GitHub cache write -- the
+# deploy is skipped, that one run goes red, and the next push that does not
+# touch site/ is green again. Production then serves an old site behind a
+# green repository. verify-prod cannot catch it: it only runs after a deploy,
+# so it never runs for the one that did not happen. #40 sat like that for
+# seven hours and was fixed by an unrelated PR that happened to touch site/.
+#
+# This asks production directly, on a clock, so it does not depend on any run
+# of ci.yml having happened at all. The logic is in
+# scripts/check-prod-drift.sh, where tests/test-prod-drift.sh has watched every
+# refusal fail; the header there says what is compared and why it is not
+# main's HEAD.
+#
+# A red scheduled run is the alarm. GitHub mails a failed scheduled run to the
+# person who last changed the cron line below, so keep it unchanged unless
+# that should change too.
+on:
+  schedule:
+    # Hourly, off the hour: :00 is when GitHub's scheduler is busiest and most
+    # likely to delay or drop a run. With the 120 min grace in the script, a
+    # missed deploy goes red within about three hours, not "whenever someone
+    # next changes site/".
+    - cron: '23 * * * *'
+  # By hand, to check after fixing a drift without waiting for the hour.
+  workflow_dispatch:
+
+# Read-only. It checks out main and makes one HTTP request; it writes nothing
+# and needs no secret.
+permissions:
+  contents: read
+
+# Two at once would only report the same answer twice.
+concurrency:
+  group: prod-drift
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      # A schedule runs on the default branch, so this is main. Full history,
+      # because the check reads which commits since the served one touched
+      # site/.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: { fetch-depth: 0 }
+      - name: Production serves main's site/
+        env:
+          # Through `env:`, not `${{ }}` in the body -- see PROD_BASE_URL in
+          # ci.yml's verify-prod for why.
+          PROD_BASE_URL: ${{ vars.PROD_BASE_URL }}
+          # Re-read main from origin AFTER reading production. The checkout is
+          # main as it was when this run was queued; a newer main can deploy
+          # before the run starts, and must not read as drift. This also makes
+          # a manual run from another branch compare against main.
+          PREEN_DRIFT_REMOTE: origin
+        run: |
+          if [ -z "$PROD_BASE_URL" ]; then
+            echo "::error::PROD_BASE_URL is not set, so production cannot be checked."
+            exit 1
+          fi
+          scripts/check-prod-drift.sh "$PROD_BASE_URL"
