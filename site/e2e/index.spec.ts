@@ -120,9 +120,14 @@ test('every prerendered route hydrates without a browser error', async ({ page }
  * the theme toggle off screen, while every other test here stayed green.
  * 320px is the narrowest width the header budget in
  * src/components/starlight-header.ts is written for.
+ *
+ * The same check catches a page component that loses litro's pageReset
+ * (issue #6). A page that overrides `static styles` without composing it back
+ * in goes content-box, and the home page then measures 438px at 390px.
+ * 360 and 390 are the common Android and iPhone widths.
  */
 test('no prerendered route scrolls sideways on a phone', async ({ page }) => {
-  for (const width of [320, 375]) {
+  for (const width of [320, 360, 375, 390]) {
     await page.setViewportSize({ width, height: 800 });
     for (const route of PRERENDERED_ROUTES) {
       // Wait for the client to draw the header. In dev the first measure can

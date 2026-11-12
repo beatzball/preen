@@ -1,5 +1,6 @@
 import { LitElement, html, css } from "lit";
 import { customElement } from "lit/decorators.js";
+import { pageReset } from "@beatzball/litro/runtime";
 
 export interface NavItem {
   label: string;
@@ -21,7 +22,15 @@ export class StarlightHeader extends LitElement {
     _theme: { type: String, state: true },
   };
 
-  static override styles = css`
+  /*
+   * pageReset is the box-sizing reset that litro ships for page components.
+   * This is not a page, so it does not inherit it; it composes it instead. A
+   * document stylesheet does not cross into a shadow root, so without it the
+   * header is content-box and its bottom border makes the bar 57px tall
+   * instead of the 56px of --sl-nav-height. Measured: the width is the same
+   * either way, because the bar has no fixed width. See issue #6.
+   */
+  static override styles = [pageReset, css`
     :host {
       display: block;
       position: sticky;
@@ -37,11 +46,6 @@ export class StarlightHeader extends LitElement {
       align-items: center;
       padding: 0 var(--sl-content-pad-x, 1.5rem);
       gap: 1rem;
-      /* The page-level box-sizing:border-box reset is a document stylesheet
-         and does not cross into this shadow root, so without this line the
-         1.5rem padding is added on top of the row rather than taken out of
-         it. See beatzball/litro#137. */
-      box-sizing: border-box;
     }
 
     /* At 320px the row runs 13px past the viewport once the menu button is
@@ -198,7 +202,7 @@ export class StarlightHeader extends LitElement {
     .theme-toggle:hover {
       background-color: var(--sl-color-gray-2, #e8e8e8);
     }
-  `;
+  `];
 
   siteTitle = "";
   nav: NavItem[] = [];

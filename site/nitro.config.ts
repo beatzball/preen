@@ -13,11 +13,13 @@ export default defineNitroConfig({
   srcDir: 'server',
 
   publicAssets: [
-    { dir: '../dist/client', baseURL: '/_litro/', maxAge: 31536000 },
+    // No maxAge: nitro would turn it into a /_litro/** immutable rule of its
+    // own, which also covers app.js. The routeRules below set the cache.
+    { dir: '../dist/client', baseURL: '/_litro/' },
     { dir: '../public',      baseURL: '/',        maxAge: 0 },
     { dir: '../content',     baseURL: '/content/', maxAge: 86400 },
     // Shoelace's assets and themes are deliberately not served. No page on
-    // this site renders an <sl-*> element -- see the note in app.ts -- and
+    // this site renders an <sl-*> element -- see the note in app-main.ts -- and
     // mounting them copied 8.5MB of icons and stylesheets into the image and
     // onto the CDN for nothing. Put both lines back alongside the component
     // import if a page ever wants one.
@@ -61,8 +63,15 @@ export default defineNitroConfig({
   compatibilityDate: '2025-01-01',
 
   routeRules: {
-    '/_litro/**': {
+    // Only the hashed chunks are immutable. app.js keeps one name in every
+    // build, so a browser must ask again each time; the page loads it as
+    // app.js?v=<content hash>, which changes with each deploy (litro 0.18.0).
+    // nginx.conf carries the same two rules for production.
+    '/_litro/assets/**': {
       headers: { 'cache-control': 'public, max-age=31536000, immutable' },
+    },
+    '/_litro/app.js': {
+      headers: { 'cache-control': 'no-cache' },
     },
   },
 });
