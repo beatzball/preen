@@ -15,6 +15,10 @@ test-diff-list.sh preen-shim+preen_list_raw
 test-diff-list.sh preen-shim+preen_list_raw+preen_list
 test-diff-list.sh preen-state+preen_state
 test-diff-list.sh preen-test+new_repo
+test-editor.sh preen-dep+source
+test-editor.sh preen-editor
+test-editor.sh preen-state+preen_state
+test-editor.sh preen-test+new_repo
 test-file.sh preen-dep+source
 test-file.sh preen-file
 test-file.sh preen-state+preen_state
