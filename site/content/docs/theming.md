@@ -110,7 +110,7 @@ For a single run, the environment variable beats both:
 ```sh
 PREEN_LAYOUT=inline preen diff
 PREEN_LAYOUT=sbs preen diff        # side-by-side, whatever git config says
-PREEN_LAYOUT=inline git diff | preen
+git diff | PREEN_LAYOUT=inline preen
 ```
 
 The order, first match wins:
@@ -122,8 +122,12 @@ The order, first match wins:
 The layout applies to every mode, including the [piped path](/docs/pipes),
 which has no `ctrl-s` to press. Only the exact word `inline` means inline. Any
 other value — `INLINE`, a typo, `sbs` — means side-by-side, and preen does not
-warn about it. If git cannot read your config file, preen starts side-by-side
-and does not print git's error.
+warn about it.
+
+If git cannot read a config file, it is not the layout that stops you. Inside a
+repository git refuses to run at all, so `diff`, `pr` and `worktrees` stop
+before the picker opens. Outside a repository, and on piped input, preen starts
+side-by-side and does not print git's error.
 
 To undo it:
 
@@ -139,7 +143,7 @@ Read by `preen` itself:
 | variable | effect |
 |---|---|
 | `PREEN_GLOW_STYLE` | path to a glow style file (default `~/.config/glow/roost.json`) |
-| `PREEN_LAYOUT` | `inline` to start inline; any other value is side-by-side. Beats `git config preen.layout` |
+| `PREEN_LAYOUT` | `inline` to start inline; any other non-empty value is side-by-side. When set and not empty it beats `git config preen.layout`; empty or unset falls through to it |
 | `EDITOR` | what `ctrl-e` opens (default `vi`) |
 | `TMPDIR` | where the scratch directory for a run is made (default `/tmp`) |
 

@@ -542,8 +542,10 @@ need_glow() {
 # Only the exact word "inline" means inline. Anything else -- a typo, "INLINE",
 # "sbs" -- is side-by-side, as it always was for PREEN_LAYOUT. The value is
 # not repaired or warned about: a wrong value costs one press of ctrl-s.
-# git's stderr is dropped, because a broken config file must not print over
-# the picker; preen then starts side-by-side.
+# git's stderr is dropped, so a config file git cannot parse does not print
+# here; this answers sbs. (Inside a repository that same file also fails the
+# rev-parse below, so diff, pr and worktrees stop before the picker. md mode
+# outside a repository and piped input carry on, side-by-side.)
 layout_mode() {
   local m="${PREEN_LAYOUT:-}"
   [ -n "$m" ] || m="$(git config --get preen.layout 2>/dev/null)" || m=""
