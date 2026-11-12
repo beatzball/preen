@@ -1163,9 +1163,9 @@ run_picker() {
     # Stop publication before user-triggered list producers take their snapshot.
     # Canceling only on load can discard a just-published poll reload after an
     # older ctrl-v/ctrl-e list has already been produced.
+    edit_action="bg-cancel+$edit_action"
     watch_args=(--track --id-nth=1
       --bind 'ctrl-v:bg-cancel+reload-sync("$PREEN_SELF" --review-file viewed {1})'
-      --bind 'ctrl-e:bg-cancel+execute("$PREEN_SELF" --review-file edit {1})+reload-sync("$PREEN_SELF" --review-list)'
       --bind 'load:bg-cancel+transform-header("$PREEN_SELF" --watch-header)+refresh-preview+bg-transform("$PREEN_SELF" --watch-await)')
     HEADER="$(watch_header)"
   fi

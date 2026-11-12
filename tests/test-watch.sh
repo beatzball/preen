@@ -55,6 +55,12 @@ SH
 cat > "$t/live/callback" <<'SH'
 #!/bin/sh
 case "${1:-}:${2:-}" in
+  --review-file:edit)
+    "$WATCH_PREEN" "$@" || exit $?
+    if [ -f "$WATCH_TEST/hold-editor" ]; then
+      : > "$WATCH_TEST/editor-held"
+      while [ ! -f "$WATCH_TEST/release-editor" ]; do sleep 0.02; done
+    fi ;;
   --review-file:viewed)
     "$WATCH_PREEN" "$@" || exit $?
     if [ -f "$WATCH_TEST/hold-viewed" ]; then
@@ -72,5 +78,10 @@ if [ -f "$WATCH_TEST/hold-poll" ]; then
 fi
 exec "$WATCH_DATE" "$@"
 SH
-chmod +x "$t/live/fzf" "$t/live/callback" "$t/live/date"
+cat > "$t/live/vim" <<'SH'
+#!/bin/sh
+printf '%s\0' "$@" > "$WATCH_TEST/editor-args"
+SH
+export EDITOR="$t/live/vim"
+chmod +x "$t/live/fzf" "$t/live/callback" "$t/live/date" "$t/live/vim"
 PATH="$t/live:$PATH" python3 "$(dirname "$0")/watch-pty.py" "$d" "$t/live"
