@@ -166,6 +166,89 @@ collect_files() {
   done
 }
 
+# Shared raw, NUL-framed diff list for the initial picker and watch reloads.
+diff_files() {
+  local rev="$1"
+  if [ -n "$rev" ]; then
+    gitw "" diff --name-only -z "$rev"
+  else
+    {
+      if gitw "" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+        gitw "" diff --name-only -z HEAD
+      else
+        gitw "" diff --name-only -z --cached
+      fi
+      gitw "" ls-files --others --exclude-standard -z
+    } | LC_ALL=C sort -z -u
+  fi
+}
+
+# Poll content rather than porcelain status: another edit to an already dirty
+# file leaves its status unchanged. Include binary patches, modes and untracked
+# content. Neither external diff drivers nor textconv should run in a poller.
+watch_snapshot() {
+  local rev f
+  rev="$(cat "$PREEN_STATE/rev")"
+  diff_files "$rev" > "$PREEN_STATE/watch-files.next"
+  {
+    cat "$PREEN_STATE/watch-files.next"
+    if [ -n "$rev" ]; then
+      gitw "" diff --no-ext-diff --no-textconv --binary "$rev" --
+    elif gitw "" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+      gitw "" diff --no-ext-diff --no-textconv --binary HEAD --
+    else
+      gitw "" diff --no-ext-diff --no-textconv --binary --cached --
+    fi
+    while IFS= read -r -d '' f; do
+      gitw "" diff --no-ext-diff --no-textconv --binary --no-index -- /dev/null "$f" 2>/dev/null || :
+    done < <(gitw "" ls-files --others --exclude-standard -z)
+  } | git hash-object --stdin > "$PREEN_STATE/watch-hash.next"
+}
+
+watch_publish() {
+  mv "$PREEN_STATE/watch-files.next" "$PREEN_STATE/files"
+  mv "$PREEN_STATE/watch-hash.next" "$PREEN_STATE/watch-hash"
+  date '+%H:%M:%S' > "$PREEN_STATE/watch-changed"
+}
+
+watch_header() {
+  review_header
+  printf '\nwatch · last changed %s' "$(cat "$PREEN_STATE/watch-changed")"
+}
+
+# --id-nth first shipped in 0.71, but bg-transform reload payloads were
+# broken until 0.73. Check the version as well as flag parsing before creating
+# state or polling. Other modes keep their existing fzf compatibility.
+watch_supported() {
+  local version major minor
+  version="$(fzf --version 2>/dev/null)" || return 1
+  major="${version%%.*}"; minor="${version#*.}"; minor="${minor%%.*}"
+  case "$major:$minor" in *[!0-9:]*|:*|*:) return 1 ;; esac
+  [ "$major" -gt 0 ] || [ "$minor" -ge 73 ] || return 1
+  # Filter mode parses flags without a terminal or callbacks. Clear user
+  # options so --listen and similar defaults cannot run during this probe.
+  FZF_DEFAULT_OPTS= FZF_DEFAULT_OPTS_FILE= fzf --track --id-nth=1 --filter='' </dev/null >/dev/null 2>&1
+  [ "$?" -le 1 ]
+}
+
+# fzf owns this bg-transform process and kills its process group on exit,
+# including sleep and any git children. The reload itself is short: waiting
+# inside reload-sync with --id-nth would block cursor movement while it polls.
+# The load binding cancels the prior waiter before starting another: viewed
+# toggles also reload the list, without completing an idle polling callback.
+watch_await() {
+  printf '%s\n' "$$" > "$PREEN_STATE/watch-pid"
+  while [ -d "$PREEN_STATE" ]; do
+    sleep 1
+    watch_snapshot
+    if ! cmp -s "$PREEN_STATE/watch-hash" "$PREEN_STATE/watch-hash.next"; then
+      watch_publish
+      printf 'reload-sync("$PREEN_SELF" --watch-list)\n'
+      return
+    fi
+  done
+}
+
 file_diff() {
   local file="$1" rev="$2" dir="${3:-}" color="${4:-always}"
   local full="${dir:+$dir/}$file"
@@ -889,6 +972,10 @@ case "${1:-}" in
   --edit)
     edit_file "$2" "${3:-$2}"
     exit $? ;;
+  --watch-check) watch_supported; exit $? ;;
+  --watch-await) watch_await; exit 0 ;;
+  --watch-list) review_list; exit $? ;;
+  --watch-header) watch_header; exit 0 ;;
   --preview)
     f="$2"; w="${FZF_PREVIEW_COLUMNS:-80}"
     kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
@@ -936,10 +1023,11 @@ case "${1:-}" in
 esac
 
 # ---- pick a mode -------------------------------------------------------------
-KIND=""; REV=""; PR=""
+KIND=""; REV=""; PR=""; WATCH=0
 case "${1:-}" in
   md)   KIND=md;   shift; TARGET="${1:-.}" ;;
   diff) KIND=diff; shift; REV="${1:-}" ;;
+  watch) KIND=diff; WATCH=1; shift; REV="${1:-}" ;;
   pr)   KIND=pr;   shift; PR="${1:-}" ;;
   worktrees|wt) KIND=wt; shift ;;
   --version|-V|version)
@@ -955,6 +1043,7 @@ preen — markdown and diffs in the terminal
   preen                 auto: diffs in a git repo, else markdown
   preen md [DIR]        browse markdown files under DIR (default .)
   preen diff [REV]      browse files changed vs REV (default: working tree)
+  preen watch [REV]     keep local diffs live (fzf 0.73 or newer)
   preen pr [NUMBER]     browse the files in a GitHub PR (default: this branch)
   preen worktrees       pick a git worktree, then browse what it changed
   preen wt              short for the same
@@ -962,6 +1051,12 @@ preen — markdown and diffs in the terminal
   ... | preen           render piped input and quit
   preen - < FILE        the same, said out loud
   preen --version       print preen's version (-V, or `preen version`)
+
+watch polls local changes every second, including untracked files with no REV.
+The selected path stays selected across refreshes. The header shows when the
+changes last updated; quitting stops polling. It needs fzf 0.73 or newer for
+stable selection across reloads. Update fzf with your package manager or an
+upstream release. PR and worktree lists are not watched.
 
 pr mode needs the gh CLI. It reads the PR diff over the network and shows it,
 with no checkout, no fetch and no stash. The one key that reaches your
@@ -1016,6 +1111,9 @@ fi
 
 command -v fzf >/dev/null || die "fzf is not installed"
 need_glow
+if [ "$WATCH" = 1 ]; then
+  watch_supported || die "watch needs fzf 0.73 or newer (stable reload tracking); update fzf with your package manager or an upstream release"
+fi
 
 # ---- state shared with the fzf callbacks ------------------------------------
 # built before the file list because pr mode caches its diff in here
@@ -1049,7 +1147,7 @@ WITH_NTH='..'; PICK='{}'; EDIT='{}'; ENTER=""; VIEWED=false
 # openable. The ${FILES[@]+...} guard is for bash 3.2, which treats an empty
 # array as unset under set -u.
 run_picker() {
-  local review_binds=() edit_action="execute(\"\$PREEN_SELF\" --edit $PICK $EDIT)" preview_action="\"\$PREEN_SELF\" --preview $PICK"
+  local watch_args=() review_binds=() edit_action="execute(\"\$PREEN_SELF\" --edit $PICK $EDIT)" preview_action="\"\$PREEN_SELF\" --preview $PICK"
   if [ "$VIEWED" = true ]; then
     review_list > "$PREEN_STATE/decorated"
     HEADER="$(review_header)"
@@ -1061,7 +1159,12 @@ run_picker() {
   else
     printf '%s\0' ${FILES[@]+"${FILES[@]}"} > "$PREEN_STATE/decorated"
   fi
-  fzf ${review_binds[@]+"${review_binds[@]}"} \
+  if [ "$WATCH" = 1 ]; then
+    watch_args=(--track --id-nth=1
+      --bind 'load:bg-cancel+transform-header("$PREEN_SELF" --watch-header)+refresh-preview+bg-transform("$PREEN_SELF" --watch-await)')
+    HEADER="$(watch_header)"
+  fi
+  fzf ${review_binds[@]+"${review_binds[@]}"} ${watch_args[@]+"${watch_args[@]}"} \
     --read0 \
     --ansi --no-multi --cycle \
     --layout=reverse \
@@ -1227,18 +1330,19 @@ else
   # the cwd, then previewed half of them as empty. Standing at the root makes
   # both halves agree, and matches what "git preen" already does.
   ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" && cd "$ROOT" || true
-  if [ -n "$REV" ]; then
-    collect_files < <(gitw "" diff --name-only -z "$REV")
-  elif git rev-parse --verify -q HEAD >/dev/null 2>&1; then
-    collect_files < <({ gitw "" diff --name-only -z HEAD
-                        gitw "" ls-files --others --exclude-standard -z
-                      } | LC_ALL=C sort -z -u)
-  else
-    collect_files < <({ gitw "" diff --name-only -z --cached
-                        gitw "" ls-files --others --exclude-standard -z
-                      } | LC_ALL=C sort -z -u)
+  if [ "$WATCH" = 1 ] && [ -n "$REV" ]; then
+    gitw "" diff --no-ext-diff --no-textconv --quiet "$REV" -- 2>/dev/null
+    [ "$?" -le 1 ] || die "invalid diff revision: $REV"
   fi
-  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc quit'
+  collect_files < <(diff_files "$REV")
+  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit hunk · esc quit'
+fi
+
+if [ "$WATCH" = 1 ]; then
+  LABEL=" preen · watch${REV:+ · $REV} "
+  watch_snapshot
+  watch_publish
+  collect_files < "$PREEN_STATE/files"
 fi
 
 ENTER="execute(\"\$PREEN_SELF\" --show {})"
@@ -1248,7 +1352,7 @@ if [ "$KIND" = diff ] || [ "$KIND" = pr ]; then
   else comparison=working-tree; fi
   review_target "$KIND" "$comparison" || die "cannot identify review target"
   HEADER="$HEADER"$'\nctrl-v viewed'
-  if [ ${#FILES[@]} -eq 0 ]; then
+  if [ "$WATCH" != 1 ] && [ ${#FILES[@]} -eq 0 ]; then
     : > "$PREEN_STATE/files"
     review_list >/dev/null
     die "nothing to show ($KIND mode)"

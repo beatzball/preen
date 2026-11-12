@@ -96,3 +96,6 @@ test-worktrees.sh preen-state+preen_state
 test-worktrees.sh preen-stonly
 test-worktrees.sh preen-test+new_repo
 test-worktrees.sh preen-wt
+test-watch.sh preen-dep+source
+test-watch.sh preen-test+new_repo
+test-watch.sh preen-watch

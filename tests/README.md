@@ -57,6 +57,7 @@ green for the wrong reason.
 | file | covers |
 |---|---|
 | `test-harness.sh` | the harness itself: the shapes that caused the damage are forbidden at the source in any spelling, the guards are called directly, and every path to `mktemp` that a clean run of each file takes is failed in turn while the checkout is watched; a call that skips the helpers fails the run. The slow half of the suite — see below |
+| `test-watch.sh` | the real fzf picker in a PTY: content and membership refreshes, stable selection with odd and US-delimited filenames, viewed-mark invalidation and counts, query retention, preview updates, an initially clean repository, old-fzf errors, and no polling process or child after Escape or Ctrl-C |
 | `test-diff-list.sh` | the list from the root and from a subdirectory, a revision argument, a repo with no commit, staged and unstaged together |
 | `test-worktrees.sh` | the count agrees with the level-one preview, merge-base rather than the branch tip, the main checkout is excluded, read-only, the pre-2.36 fallback, and the two kinds of worktree it has to drop — one git cannot spell and one that was deleted without a prune — each with the reason it is allowed to give |
 | `test-stdin.sh` | the diff/markdown sniff, including `---` alone staying markdown and a `--color=always` diff still reading as a diff; a failed `mktemp` for the buffer stops with a reason instead of writing `/input.md` (#33) |
