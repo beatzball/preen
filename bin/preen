@@ -587,13 +587,14 @@ looks_like_diff() {
 # preview beside it.
 #
 # The cost is worth stating, precisely. less has no text selection of its own.
-# It asks for click reporting (1000, SGR-encoded via 1006) and never for
-# motion (1002/1003) until 678, which adds 1002 -- so while it holds the mouse, a plain drag either does nothing (668 and earlier) or
-# scrolls the file (678 and later). Either way it does not select. To select
-# and copy, hold whichever modifier your terminal uses to bypass mouse
-# reporting: shift in xterm, option in iTerm2. Under tmux the drag is unchanged
-# either way, because tmux already forwarded it. A left click sets a mark, a
-# right click jumps back, and a click on an OSC 8 link opens a less prompt.
+# It asks for click reporting (1000, SGR-encoded via 1006) and not for motion
+# (1002/1003) before 678, which adds 1002 -- so while it holds the mouse, a
+# plain drag either does nothing (668 and earlier) or scrolls the file (678
+# and later). Either way it does not select. To select and copy, hold
+# whichever modifier your terminal uses to bypass mouse reporting: shift in
+# xterm, option in iTerm2. Under tmux the drag is unchanged either way,
+# because tmux already forwarded it. A left click sets a mark, a right click
+# jumps back, and a click on an OSC 8 link opens a less prompt.
 pager() {
   [ -t 1 ] && command -v less >/dev/null || { cat; return; }
   case "$(less --help 2>/dev/null)" in
