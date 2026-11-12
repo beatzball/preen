@@ -21,7 +21,7 @@ export const starlightHead = [
   '<link rel="apple-touch-icon" href="/apple-touch-icon.png" />',
   // Only starlight.css is linked here.
   //
-  // The Shoelace theme went with the components in app.ts — nothing renders an
+  // The Shoelace theme went with the components in app-main.ts — nothing renders an
   // <sl-*> element, and this link blocked first paint for 19KB.
   //
   // highlight.css went because it never applied: every .hljs span lives inside

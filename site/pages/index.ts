@@ -1,4 +1,4 @@
-import { css, html } from 'lit';
+import { html } from 'lit';
 import { customElement } from 'lit/decorators.js';
 import { LitroPage } from '@beatzball/litro/runtime';
 import { definePageData } from '@beatzball/litro';
@@ -116,33 +116,19 @@ export const routeMeta = {
 
 @customElement('page-home')
 export class SplashPage extends LitroPage {
-  /**
-   * Local workaround for beatzball/litro#137 — remove once the recipe ships
-   * its own reset.
+  /*
+   * No static styles here, on purpose. LitroPage carries pageReset (the
+   * box-sizing reset plus display:block on the host) since litro 0.16.3, and
+   * this page inherits it. Without that reset the <main> below is content-box,
+   * and its 1.5rem side padding puts the page 48px wider than a phone screen.
    *
-   * The `box-sizing: border-box` reset lives in public/styles/starlight.css,
-   * which is a document stylesheet and so does not cross into this
-   * component's shadow root. Without it the <main> below computes as
-   * content-box: `width:100%` resolves to the full viewport and the 1.5rem
-   * side padding is added on top, putting the page 48px wider than the screen
-   * on every phone. Invisible above ~900px, where `max-width:56rem` caps
-   * <main> before the padding can matter.
+   * If this page ever needs its own styles, compose them, because an override
+   * replaces the inherited value:
    *
-   * litro.dev works around the same bug by dropping the horizontal padding
-   * from <main> entirely. That trades the overflow for content sitting flush
-   * against the screen edge; resetting box-sizing keeps the gutters.
+   *   static override styles = [pageReset, css...];
+   *
+   * with pageReset imported from @beatzball/litro/runtime. See issue #6.
    */
-  static override styles = css`
-    :host {
-      display: block;
-    }
-
-    *,
-    *::before,
-    *::after {
-      box-sizing: border-box;
-    }
-  `;
 
   override render() {
     const data = this.serverData as SplashData | null;

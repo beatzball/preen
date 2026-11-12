@@ -64,14 +64,20 @@ in the file, so `less -R out.txt` later looks the same as it did live. So does
 
 ## Layout
 
-`PREEN_LAYOUT=inline` applies here too:
+The starting layout applies here too. `git config preen.layout inline` is read
+from the directory you run preen in, and `PREEN_LAYOUT` beats it:
 
 ```sh
-PREEN_LAYOUT=inline git diff | preen
+git diff | PREEN_LAYOUT=inline preen
 ```
 
-There is no `ctrl-s` on this path — there is no picker to press it in — so the
-environment variable is the only way to choose.
+Put the variable after the `|`. Written before `git diff`, it is set for git,
+not for preen, and preen ignores it: you get `git config preen.layout`, or
+side-by-side.
+
+There is no `ctrl-s` on this path — there is no picker to press it in — so
+those two are the only way to choose. See
+[Theming](/docs/theming#starting-in-inline).
 
 ## What it needs
 

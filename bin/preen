@@ -530,8 +530,27 @@ need_glow() {
     || die "glow 3 or newer is needed for colored output (found: $(glow --version 2>/dev/null)); run install.sh"
 }
 
+# The layout a run starts in. Every place that picks it calls this, so the
+# picker, its previews and piped input cannot disagree.
+#
+#   1. PREEN_LAYOUT, when set and not empty: a one-off override still wins
+#   2. git config preen.layout. git's own lookup reads the repository first,
+#      then --global, then --system, so a global value is a machine-wide
+#      default. Outside a repository only the global and system files count.
+#   3. sbs
+#
+# Only the exact word "inline" means inline. Anything else -- a typo, "INLINE",
+# "sbs" -- is side-by-side, as it always was for PREEN_LAYOUT. The value is
+# not repaired or warned about: a wrong value costs one press of ctrl-s.
+# git's stderr is dropped, so a config file git cannot parse does not print
+# here; this answers sbs. (Inside a repository that same file also fails the
+# next git call -- rev-parse for diff and worktrees, gh's own git call for pr --
+# so those modes stop before the picker. md mode outside a repository and
+# piped input carry on, side-by-side.)
 layout_mode() {
-  case "${PREEN_LAYOUT:-sbs}" in inline) echo inline ;; *) echo sbs ;; esac
+  local m="${PREEN_LAYOUT:-}"
+  [ -n "$m" ] || m="$(git config --get preen.layout 2>/dev/null)" || m=""
+  case "$m" in inline) echo inline ;; *) echo sbs ;; esac
 }
 
 # git diff --color=always paints the headers, so strip CSI escapes before the
@@ -568,8 +587,10 @@ looks_like_diff() {
 # older one for years. An unknown flag does not kill less: it prints
 # `There is no mouse option ("less --help" for help)` -- no dashes, that form
 # is only for the interactive `--` command -- and carries on. From 572 it waits
-# for RETURN first, which would put a prompt in front of every render, and that
-# is reason enough not to send the flag blind.
+# for RETURN first. That cannot happen through preen: every less from 546
+# names --mouse in its help, so a less new enough to wait always passes the
+# probe. The probe stands on simpler ground: a flag that only some versions
+# know is checked before it is used.
 #
 # The probe is a case over a command substitution, NOT `less --help | grep -q`.
 # `grep -q` exits at the first match, the rest of less's output takes SIGPIPE,
@@ -585,13 +606,14 @@ looks_like_diff() {
 # preview beside it.
 #
 # The cost is worth stating, precisely. less has no text selection of its own.
-# It asks for modes 1000 and 1006, and from 678 for 1002 as well -- so while it
-# holds the mouse, a plain drag either does nothing (668 and earlier) or
-# scrolls the file (678 and later). Either way it does not select. To select
-# and copy, hold whichever modifier your terminal uses to bypass mouse
-# reporting: shift in xterm, option in iTerm2. Under tmux the drag is unchanged
-# either way, because tmux already forwarded it. A left click sets a mark, a
-# right click jumps back, and a click on an OSC 8 link opens a less prompt.
+# It asks for click reporting (1000, SGR-encoded via 1006) and not for motion
+# (1002/1003) before 678, which adds 1002 -- so while it holds the mouse, a
+# plain drag either does nothing (668 and earlier) or scrolls the file (678
+# and later). Either way it does not select. To select and copy, hold
+# whichever modifier your terminal uses to bypass mouse reporting: shift in
+# xterm, option in iTerm2. Under tmux the drag is unchanged either way,
+# because tmux already forwarded it. A left click sets a mark, a right click
+# jumps back, and a click on an OSC 8 link opens a less prompt.
 pager() {
   [ -t 1 ] && command -v less >/dev/null || { cat; return; }
   case "$(less --help 2>/dev/null)" in
@@ -714,8 +736,8 @@ checkout, no fetch, no stash, nothing is written to any worktree.
 a named file and piped input are both paged through less -R on a terminal, so
 the render stays up until you press q. Into a pipe they are written plain, with
 the color kept. A file always goes to glow; piped input picks its own renderer,
-a unified diff to delta and anything else to glow. PREEN_LAYOUT=inline applies
-to pipes.
+a unified diff to delta and anything else to glow. The starting layout below
+applies to pipes too.
 
 keys inside the picker
   ctrl-d / ctrl-u            scroll the preview 8 lines
@@ -723,7 +745,8 @@ keys inside the picker
   shift-down / shift-up      scroll the preview one line
   home / end                 jump the preview to top or bottom
   ctrl-s   toggle side-by-side <-> inline (diff, pr and worktrees modes)
-           start in inline with PREEN_LAYOUT=inline
+           start in inline with PREEN_LAYOUT=inline, or by default with
+           git config preen.layout inline (add --global for every repo)
   enter    open the full render in a pager
   ctrl-e   open in $EDITOR
   ctrl-/   hide or show the preview
@@ -764,7 +787,7 @@ PREEN_STATE="$(mktemp -d "${TMPDIR:-/tmp}/preen.XXXXXX" 2>/dev/null)" \
   || die "no temporary directory under TMPDIR=${TMPDIR:-/tmp}"
 trap 'rm -rf "$PREEN_STATE"' EXIT
 echo "$KIND" > "$PREEN_STATE/kind"
-case "${PREEN_LAYOUT:-sbs}" in inline) echo inline ;; *) echo sbs ;; esac > "$PREEN_STATE/mode"
+layout_mode > "$PREEN_STATE/mode"
 echo "$REV"  > "$PREEN_STATE/rev"
 : > "$PREEN_STATE/dir"          # empty: git runs here, not in another worktree
 export PREEN_STATE GLOW_STYLE
