@@ -72,7 +72,8 @@ git diff | PREEN_LAYOUT=inline preen
 ```
 
 Put the variable after the `|`. Written before `git diff`, it is set for git,
-not for preen, and preen starts side-by-side.
+not for preen, and preen ignores it: you get `git config preen.layout`, or
+side-by-side.
 
 There is no `ctrl-s` on this path — there is no picker to press it in — so
 those two are the only way to choose. See

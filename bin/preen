@@ -544,8 +544,9 @@ need_glow() {
 # not repaired or warned about: a wrong value costs one press of ctrl-s.
 # git's stderr is dropped, so a config file git cannot parse does not print
 # here; this answers sbs. (Inside a repository that same file also fails the
-# rev-parse below, so diff, pr and worktrees stop before the picker. md mode
-# outside a repository and piped input carry on, side-by-side.)
+# next git call -- rev-parse for diff and worktrees, gh's own git call for pr --
+# so those modes stop before the picker. md mode outside a repository and
+# piped input carry on, side-by-side.)
 layout_mode() {
   local m="${PREEN_LAYOUT:-}"
   [ -n "$m" ] || m="$(git config --get preen.layout 2>/dev/null)" || m=""
