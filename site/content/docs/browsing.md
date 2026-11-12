@@ -11,6 +11,7 @@ sidebar:
 preen                 # auto: diffs in a git repo, else markdown
 preen md [DIR]        # browse markdown files under DIR (default .)
 preen diff [REV]      # browse files changed vs REV (default: working tree)
+preen watch [REV]     # keep local diffs live (fzf 0.73 or newer)
 preen FILE.md         # render one file, paged, and quit
 ... | preen           # render piped input and quit
 preen - < FILE        # the same, said out loud
@@ -69,6 +70,29 @@ Review state lives in `preen/` under `$XDG_STATE_HOME`, or under
 checkout. Set `XDG_STATE_HOME` to an absolute directory outside your repositories
 to choose another location. Removing the `preen/` state directory clears saved
 review progress.
+
+## `preen watch` — follow changes as they happen
+
+```sh
+preen watch           # staged, unstaged and untracked changes
+preen watch main      # changes against a revision, like preen diff main
+```
+
+Watch checks local content every second. Edits refresh the preview, new files
+enter the list, and reverted files leave it. The selected file stays selected
+while it remains in the list, including when another file is inserted ahead of
+it. The header shows the time changes were last detected. A clean repository
+opens an empty picker and waits for its first change.
+
+Watch uses the same keys as the diff picker below. Viewed marks clear as soon
+as a watched file changes, and the header updates its viewed count. `esc` or `ctrl-c` quits and
+stops polling. It watches local diffs; PR and worktree lists are not watched.
+With a revision, untracked files stay outside the list, just as in `preen diff`.
+
+**Watch needs fzf 0.73 or newer**, whose path identity and background reload support
+preserve your selection across list reloads. Older fzf still works for other preen modes;
+watch exits with upgrade advice before starting a poller. Update fzf with
+your package manager or an [upstream release](https://github.com/junegunn/fzf/releases).
 
 ## `preen FILE.md` — render one file
 
@@ -158,6 +182,8 @@ one common mistake silently breaks it.
 | `ctrl-/` | hide or show the preview |
 | `esc` | quit, or in worktrees mode go back one level |
 | `ctrl-c` | quit |
+
+`preen watch` keeps these keys while refreshing the list and preview.
 
 Typing filters the list, as in any fzf picker. The arrow keys move the cursor
 and the list cycles at both ends.

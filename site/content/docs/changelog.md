@@ -26,6 +26,11 @@ and this project uses [Semantic Versioning](https://semver.org/).
   Marks and a viewed count survive restarting the same review, and a changed
   diff clears its mark. Review progress is stored under `XDG_STATE_HOME/preen`,
   outside the checkout.
+- **`preen watch [REV]` follows local diffs as files change** (#53). The list
+  and preview refresh, the selected file stays selected, and the header shows
+  when changes were last detected. Viewed marks clear when content changes.
+  A clean repository waits for its first change; quitting stops polling. Watch needs fzf 0.73 or newer for stable
+  selection across reloads. Other modes keep their existing fzf support.
 
 ## [0.2.0]
 
