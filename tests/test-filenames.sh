@@ -27,11 +27,11 @@ cleanup() {
   # section: a file that dies partway never reaches those.
   rm -rf ${d:+"$d"} ${s:+"$s"} ${wtroot:+"$wtroot"} ${wtroot2:+"$wtroot2"} \
          ${mdd:+"$mdd"} ${shim:+"$shim"} ${prd:+"$prd"} ${spr:+"$spr"} \
-         ${edbin:+"$edbin"} ${rend:+"$rend"} ${sren:+"$sren"} \
+         ${raw2:+"$raw2.state"} ${raw2t:+"$raw2t.state"} ${edbin:+"$edbin"} ${rend:+"$rend"} ${sren:+"$sren"} \
          ${nofzfmd:+"$nofzfmd"} "${_preen_dep_shim:-}"
-  rm -f ${edlog:+"$edlog"} ${raw:+"$raw" "$raw.argv"} \
-        ${raw2:+"$raw2" "$raw2.argv" "$raw2.n" "$raw2.level1"} \
-        ${raw2t:+"$raw2t" "$raw2t.argv" "$raw2t.n" "$raw2t.level1"}
+  rm -f ${edlog:+"$edlog"} ${raw:+"$raw" "$raw.argv" "$raw.records"} \
+        ${raw2:+"$raw2" "$raw2.argv" "$raw2.n" "$raw2.level1" "$raw2.records"} \
+        ${raw2t:+"$raw2t" "$raw2t.argv" "$raw2t.n" "$raw2t.level1" "$raw2t.records"}
 }
 trap cleanup EXIT
 s="$(preen_state diff sbs "" "")" || exit 1
@@ -177,14 +177,14 @@ assert_eq "$(list_count "$raw2")" "4" "worktree level two holds one entry per fi
 # the shape: fzf quotes {} itself, and the path is spent as a variable the
 # executing shell expands, never pasted in.
 bind="$(list_bind "$raw2" 'ctrl-e')"
-assert_contains "$bind" 'PREEN_WT_DIR' "ctrl-e takes the worktree path from the environment"
+assert_contains "$bind" '--review-file edit {1}' "ctrl-e resolves the raw worktree filename through its safe ID"
 assert_not_contains "$bind" "$wt" "ctrl-e does not paste the worktree path into the command"
 
 # Both of those grade the shape of a string. The quoting inside it is what does
 # the work, so run the thing: strip fzf's own `execute(...)` wrapper, put a
 # shell-quoted filename where fzf puts one, and let a shell have it. A path
 # with a space in it is what an unquoted $PREEN_WT_DIR breaks on.
-cmd="${bind#execute(}"; cmd="${cmd%)}"
+cmd="${bind#execute(}"; cmd="${cmd%%)+reload-sync*}"; cmd="${cmd%)}"
 mktmpf edlog preen-ed
 mktmpd edbin preen-edbin
 cat > "$edbin/ed" <<EOF
@@ -194,8 +194,17 @@ printf '%s\n' "\$1" >> "$edlog"
 [ -e "\$1" ] && printf 'exists\n' >> "$edlog" || printf 'missing\n' >> "$edlog"
 EOF
 chmod +x "$edbin/ed"
-( export PREEN_WT_DIR="$wt" EDITOR="$edbin/ed" PREEN_SELF="$PREEN" PREEN_STATE="$swt"
-  sh -c "$(printf '%s' "$cmd" | sed "s|{}|'wt\"quote.txt'|g")" ) >/dev/null 2>&1
+key="$(python3 - "$raw2.records" <<'PY_ID'
+import sys
+for record in open(sys.argv[1], 'rb').read().split(b'\0'):
+    fields = record.split(b'\x1f', 2)
+    if len(fields) == 3 and fields[2] == b'wt"quote.txt':
+        print(fields[0].decode())
+        break
+PY_ID
+)"
+( export PREEN_WT_DIR="$wt" EDITOR="$edbin/ed" PREEN_SELF="$PREEN" PREEN_STATE="$raw2.state"
+  sh -c "$(printf '%s' "$cmd" | sed "s|{1}|$key|")" ) >/dev/null 2>&1
 
 assert_eq "$(sed -n 1p "$edlog")" "1"      "ctrl-e hands the editor exactly one argument"
 assert_eq "$(sed -n 3p "$edlog")" "exists" "ctrl-e opens a file that is really there"

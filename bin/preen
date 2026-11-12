@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # preen — browse markdown and diffs in the terminal.
 #   glow renders the markdown, delta renders the diffs, fzf does the file nav.
+# Persistent review store (v1), outside checkouts:
+#   ${XDG_STATE_HOME:-$HOME/.local/state}/preen/v1/targets/<target-hash>/
+#     target                 NUL-framed repository, kind and comparison
+#     files/<path-hash>.path  original filename, NUL-terminated
+#     files/<path-hash>.viewed  hash of the reviewed raw per-file diff
+#     files/<path-hash>.note  reserved for plain-text review notes (#52)
+# Target/path hashes use git hash-object --stdin (no -w, no object writes).
+# Comparison is working-tree or the literal REV, PR number, or worktree path;
+# changing the base commit under the same REV invalidates marks by diff hash.
+# PREEN_STATE is separate, temporary callback state, removed on exit.
 set -uo pipefail
 
 GLOW_STYLE="${PREEN_GLOW_STYLE:-$HOME/.config/glow/roost.json}"
@@ -158,16 +168,21 @@ collect_files() {
 
 file_diff() {
   local file="$1" rev="$2" dir="${3:-}" color="${4:-always}"
+  local full="${dir:+$dir/}$file"
+  local options=()
+  [ "${5:-}" != review ] || options=(--binary --no-ext-diff --no-textconv)
   {
-    if ! gitw "$dir" ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
+    if { [ -e "$full" ] || [ -L "$full" ]; } \
+       && ! gitw "$dir" ls-files --error-unmatch -- "$file" >/dev/null 2>&1 \
+       && ! gitw "$dir" cat-file -e "${rev:-HEAD}:$file" 2>/dev/null; then
       # untracked: show the whole file as an addition
-      gitw "$dir" diff --no-index --color="$color" -- /dev/null "$file" 2>/dev/null
+      gitw "$dir" diff ${options[@]+"${options[@]}"} --no-index --color="$color" -- /dev/null "$file" 2>/dev/null || [ "$?" -eq 1 ]
     elif [ -n "$rev" ]; then
-      gitw "$dir" diff --color="$color" "$rev" -- "$file"
+      gitw "$dir" diff ${options[@]+"${options[@]}"} --color="$color" "$rev" -- "$file"
     elif gitw "$dir" rev-parse --verify -q HEAD >/dev/null 2>&1; then
-      gitw "$dir" diff --color="$color" HEAD -- "$file"   # staged and unstaged together
+      gitw "$dir" diff ${options[@]+"${options[@]}"} --color="$color" HEAD -- "$file"   # staged and unstaged together
     else
-      gitw "$dir" diff --color="$color" --cached -- "$file"   # repo with no commit yet
+      gitw "$dir" diff ${options[@]+"${options[@]}"} --color="$color" --cached -- "$file"   # repo with no commit yet
     fi
   }
 }
@@ -705,6 +720,170 @@ edit_file() {
   "${editor[@]}" "$path"
 }
 
+# ---- persistent review progress ---------------------------------------------
+# Configure a target without creating anything: simply browsing is read-only,
+# including when the state home is unavailable. Only ctrl-v creates the store.
+review_target() {
+  local kind="$1" comparison="$2" repo state_home target_hash
+  repo="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
+  case "$state_home" in /*) ;; *) state_home="$HOME/.local/state" ;; esac
+  target_hash="$(printf '%s\0%s\0%s\0' "$repo" "$kind" "$comparison" | git hash-object --stdin)" || return 1
+  printf '%s\0%s\0%s\0' "$repo" "$kind" "$comparison" > "$PREEN_STATE/target"
+  printf '%s' "$state_home/preen/v1/targets/$target_hash" > "$PREEN_STATE/review-dir"
+}
+
+review_diff() {
+  local file="$1" kind dir rev
+  kind="$(cat "$PREEN_STATE/kind")"
+  if [ "$kind" = pr ]; then
+    pr_slice "$file" "$PREEN_STATE/pr.diff"
+    return
+  fi
+  dir="$(cat "$PREEN_STATE/dir")"; rev="$(cat "$PREEN_STATE/rev")"
+  file_diff "$file" "$rev" "$dir" never review
+}
+
+review_hash() {
+  # review_diff normalizes the expected no-index difference status. Other
+  # failures must not produce a viewed mark for an empty, unreadable diff.
+  review_diff "$1" | git hash-object --stdin
+}
+
+review_is_viewed() {
+  local file="$1" store="$2" key="$3" saved current
+  [ -f "$store/files/$key.viewed" ] || return 1
+  review_store_safe "$store" || return 1
+  saved="$(cat "$store/files/$key.viewed")"
+  current="$(review_hash "$file")" || return 1
+  [ -n "$saved" ] && [ "$saved" = "$current" ] && return 0
+  # Never resurrect a stale mark if content later returns to its old bytes.
+  rm -f "$store/files/$key.viewed"
+  return 1
+}
+
+review_list() {
+  local file store key mark n=0 total=0
+  store="$(cat "$PREEN_STATE/review-dir")"
+  mkdir -p "$PREEN_STATE/paths" || return 1
+  # Revalidate saved marks even for paths absent from the current file list.
+  # A restored-to-HEAD file must not keep a mark that later resurrects.
+  for mark in "$store"/files/*.viewed; do
+    [ -f "$mark" ] || continue
+    key="${mark##*/}"; key="${key%.viewed}"
+    if IFS= read -r -d '' file < "$store/files/$key.path"; then
+      review_is_viewed "$file" "$store" "$key" || :
+    fi
+  done
+  while IFS= read -r -d '' file; do
+    [ -n "$file" ] || continue
+    total=$((total + 1))
+    key="$(printf '%s' "$file" | git hash-object --stdin)" || return 1
+    printf '%s\0' "$file" > "$PREEN_STATE/paths/$key" || return 1
+    if review_is_viewed "$file" "$store" "$key"; then
+      n=$((n + 1))
+      printf '%s%s\033[2m✓\033[0m%s%s\0' "$key" "$WT_SEP" "$WT_SEP" "$file"
+    else
+      printf '%s%s %s%s\0' "$key" "$WT_SEP" "$WT_SEP" "$file"
+    fi
+  done < "$PREEN_STATE/files"
+  printf '%s of %s viewed' "$n" "$total" > "$PREEN_STATE/viewed-count"
+}
+
+# The field sent through fzf is a hex ID, never a filename. The display can
+# contain US, tabs, newlines, quotes and shell text without affecting callbacks.
+review_file() {
+  local action="$1" key="$2" file open
+  case "$key" in ''|*[!0-9a-f]*) die "invalid review file ID" ;; esac
+  IFS= read -r -d '' file < "$PREEN_STATE/paths/$key" || die "missing review file path"
+  case "$action" in
+    viewed) review_toggle "$file" ;;
+    preview|show) exec "$SELF" "--$action" "$file" ;;
+    edit)
+      open="${PREEN_WT_DIR:+$PREEN_WT_DIR/}$file"
+      edit_file "$file" "$open" ;;
+    *) die "unknown review file action" ;;
+  esac
+}
+
+review_header() {
+  cat "$PREEN_STATE/header"
+  printf '\n%s' "$(cat "$PREEN_STATE/viewed-count")"
+}
+
+# Canonicalize even a destination that does not exist yet. Merely resolving
+# the nearest existing ancestor misses missing/../checkout and dangling
+# symlinks whose eventual destination is inside the checkout.
+review_location() {
+  local rest="${1#/}" path=/ part link hops=0
+  while [ -n "$rest" ]; do
+    part="${rest%%/*}"
+    case "$rest" in */*) rest="${rest#*/}" ;; *) rest="" ;; esac
+    case "$part" in
+      ''|.) continue ;;
+      ..) path="${path%/*}"; [ -n "$path" ] || path=/ ;;
+      *)
+        path="${path%/}/$part"
+        if [ -L "$path" ]; then
+          hops=$((hops + 1)); [ "$hops" -le 40 ] || return 1
+          link="$(readlink "$path")" || return 1
+          case "$link" in /*) path=/ ;; *) path="${path%/*}"; [ -n "$path" ] || path=/ ;; esac
+          rest="$link${rest:+/$rest}"
+        fi ;;
+    esac
+  done
+  printf '%s' "$path"
+}
+
+review_store_safe() {
+  local store="$1" repo reviewed physical ancestor
+  IFS= read -r -d '' repo < "$PREEN_STATE/target" || return 1
+  physical="$(review_location "$store")" || die "cannot resolve review state directory"
+  reviewed="$(cat "$PREEN_STATE/dir")"
+  ancestor="$physical"
+  while :; do
+    if [ "$ancestor" -ef "$repo" ] || { [ -n "$reviewed" ] && [ "$ancestor" -ef "$reviewed" ]; }; then
+      die "review state must be outside the checkout; set XDG_STATE_HOME"
+    fi
+    [ "$ancestor" != / ] || break
+    ancestor="${ancestor%/*}"; [ -n "$ancestor" ] || ancestor=/
+  done
+}
+
+review_toggle() {
+  local file="$1" store key hash tmp
+  [ -s "$PREEN_STATE/review-dir" ] || return 0
+  store="$(cat "$PREEN_STATE/review-dir")"
+  review_store_safe "$store" || return 1
+  key="$(printf '%s' "$file" | git hash-object --stdin)" || return 1
+  if review_is_viewed "$file" "$store" "$key"; then
+    rm -f "$store/files/$key.viewed" || die "cannot remove viewed mark"
+  else
+    hash="$(review_hash "$file")" || die "cannot hash file diff"
+    ( umask 077; mkdir -p "$store/files" ) || die "cannot create review state under ${XDG_STATE_HOME:-$HOME/.local/state}"
+    cp "$PREEN_STATE/target" "$store/target" || die "cannot write review target"
+    printf '%s\0' "$file" > "$store/files/$key.path" || die "cannot write review filename"
+    tmp="$(mktemp "$store/files/$key.XXXXXX")" || die "cannot create viewed mark"
+    if ! printf '%s\n' "$hash" > "$tmp" || ! mv -f "$tmp" "$store/files/$key.viewed"; then
+      rm -f "$tmp"; die "cannot write viewed mark"
+    fi
+  fi
+  review_list
+}
+
+# Called with the raw FILES array and base HEADER. --review-list is reusable by
+# watch: update PREEN_STATE/files first, reload it, then --review-header.
+review_picker() {
+  : > "$PREEN_STATE/files"
+  if [ ${#FILES[@]} -gt 0 ]; then printf '%s\0' "${FILES[@]}" > "$PREEN_STATE/files"; fi
+  printf '%s' "$HEADER" > "$PREEN_STATE/header"
+  WITH_NTH='2..'; PICK='{1}'
+  ENTER='execute("$PREEN_SELF" --review-file show {1})'
+  VIEWED=true
+  run_picker
+  VIEWED=false
+}
+
 # ---- hooks fzf calls back into ----------------------------------------------
 case "${1:-}" in
   --edit)
@@ -746,6 +925,10 @@ case "${1:-}" in
         "$(cat "$PREEN_STATE/dir"  2>/dev/null || echo '')" | pager
     fi
     exit 0 ;;
+  --review-file) review_file "$2" "$3"; exit $? ;;
+  --review-list) review_list; exit $? ;;
+  --review-header) review_header; exit 0 ;;
+  --viewed) review_toggle "$2"; exit 0 ;;
   --toggle)
     m="$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)"
     [ "$m" = sbs ] && echo inline > "$PREEN_STATE/mode" || echo sbs > "$PREEN_STATE/mode"
@@ -806,8 +989,10 @@ keys inside the picker
            start in inline with PREEN_LAYOUT=inline, or by default with
            git config preen.layout inline (add --global for every repo)
   enter    open the full render in a pager
-  ctrl-e   open in $EDITOR at the first diff hunk (known editors; md at top)
-           unknown editors open plainly; pr opens your own checkout copy
+  ctrl-v   mark or unmark viewed (diff, pr and worktree files)
+           marks persist under XDG_STATE_HOME/preen; changed diffs clear them
+  ctrl-e   open in $EDITOR at the first diff hunk (Markdown opens at the top)
+           known editors get a line jump; unknown editors open plainly
   ctrl-/   hide or show the preview
   esc      quit, or in worktrees mode go back one level
   ctrl-c   quit
@@ -857,21 +1042,33 @@ export PREEN_STATE GLOW_STYLE
 # the callbacks are handed), EDIT (what ctrl-e opens) and ENTER (what enter
 # does), so a second level costs a few variables rather than a second block.
 FILES=(); LABEL=""; HEADER=""; PROMPT='  file ❯ '
-WITH_NTH='..'; PICK='{}'; EDIT='{}'; ENTER=""
+WITH_NTH='..'; PICK='{}'; EDIT='{}'; ENTER=""; VIEWED=false
 
 # --read0 rather than a newline-delimited list: a filename may contain a
 # newline, and split on newline it would arrive as two entries, neither of them
 # openable. The ${FILES[@]+...} guard is for bash 3.2, which treats an empty
 # array as unset under set -u.
 run_picker() {
-  printf '%s\0' ${FILES[@]+"${FILES[@]}"} | fzf \
+  local review_binds=() edit_action="execute(\"\$PREEN_SELF\" --edit $PICK $EDIT)" preview_action="\"\$PREEN_SELF\" --preview $PICK"
+  if [ "$VIEWED" = true ]; then
+    review_list > "$PREEN_STATE/decorated"
+    HEADER="$(review_header)"
+    preview_action='"$PREEN_SELF" --review-file preview {1}'
+    edit_action='execute("$PREEN_SELF" --review-file edit {1})+reload-sync("$PREEN_SELF" --review-list)'
+    review_binds=(--nth=2.. --tiebreak=index
+      --bind 'ctrl-v:reload-sync("$PREEN_SELF" --review-file viewed {1})'
+      --bind 'load:transform-header("$PREEN_SELF" --review-header)')
+  else
+    printf '%s\0' ${FILES[@]+"${FILES[@]}"} > "$PREEN_STATE/decorated"
+  fi
+  fzf ${review_binds[@]+"${review_binds[@]}"} \
     --read0 \
     --ansi --no-multi --cycle \
     --layout=reverse \
     --border=rounded \
     --border-label="$LABEL" \
     --delimiter="$WT_SEP" --with-nth="$WITH_NTH" \
-    --preview "\"\$PREEN_SELF\" --preview $PICK" \
+    --preview "$preview_action" \
     --preview-window 'right,65%,border-left' \
     --header "$HEADER" \
     --prompt "$PROMPT" \
@@ -881,7 +1078,7 @@ run_picker() {
     --color 'header:#8a84b0,info:#8a84b0,spinner:#7c6ff0,marker:#3a3558' \
     --bind "ctrl-s:execute-silent(\"\$PREEN_SELF\" --toggle)+refresh-preview" \
     --bind "enter:$ENTER" \
-    --bind "ctrl-e:execute(\"\$PREEN_SELF\" --edit $PICK $EDIT)" \
+    --bind "ctrl-e:$edit_action" \
     --bind "ctrl-c:execute-silent(touch '$PREEN_STATE/quit')+abort" \
     --bind 'ctrl-/:toggle-preview' \
     --bind 'ctrl-d:preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down' \
@@ -891,7 +1088,7 @@ run_picker() {
     --bind 'shift-down:preview-down' \
     --bind 'shift-up:preview-up' \
     --bind 'home:preview-top' \
-    --bind 'end:preview-bottom'
+    --bind 'end:preview-bottom' < "$PREEN_STATE/decorated"
 }
 
 # ---- worktrees: pick a worktree, then browse its diff -------------------------
@@ -932,14 +1129,26 @@ wt_loop() {
       export PREEN_WT_DIR="$dir"
       EDIT='"$PREEN_WT_DIR"/{}'
       ENTER="execute(\"\$PREEN_SELF\" --show {})"
-      HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit hunk · esc back'
+      HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc back'
     else
+      # A clean worktree still needs to invalidate marks saved from its old
+      # diff before showing the informational row.
+      echo diff > "$PREEN_STATE/kind"
+      review_target wt "$dir" || die "cannot identify worktree review target"
+      : > "$PREEN_STATE/files"
+      review_list >/dev/null
       echo none > "$PREEN_STATE/kind"
       FILES=("$branch has changed nothing against its merge-base")
       EDIT='{}'; ENTER='ignore'
       HEADER='esc  back to the worktree list'
     fi
-    run_picker >/dev/null
+    if [ "$(cat "$PREEN_STATE/kind")" = diff ]; then
+      review_target wt "$dir" || die "cannot identify worktree review target"
+      HEADER="$HEADER"$'\nctrl-v viewed'
+      review_picker >/dev/null
+    else
+      run_picker >/dev/null
+    fi
     [ -f "$PREEN_STATE/quit" ] && return 0
   done
 }
@@ -1007,7 +1216,7 @@ elif [ "$KIND" = pr ]; then
     [ -n "$prfile" ] && FILES+=("$prfile")
   done < <(gh pr diff "$PRNUM" --name-only 2>/dev/null)
   LABEL=" preen · pr #$PRNUM · $(printf '%s' "$PRTITLE" | cut -c1-60) "
-  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit hunk · esc quit'
+  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc quit'
 else
   command -v delta >/dev/null || die "delta is not installed"
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
@@ -1029,10 +1238,23 @@ else
                         gitw "" ls-files --others --exclude-standard -z
                       } | LC_ALL=C sort -z -u)
   fi
-  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit hunk · esc quit'
+  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc quit'
 fi
 
-[ ${#FILES[@]} -gt 0 ] || die "nothing to show ($KIND mode)"
-
 ENTER="execute(\"\$PREEN_SELF\" --show {})"
-run_picker >/dev/null
+if [ "$KIND" = diff ] || [ "$KIND" = pr ]; then
+  if [ "$KIND" = pr ]; then comparison="$PRNUM"
+  elif [ -n "$REV" ]; then comparison="rev:$REV"
+  else comparison=working-tree; fi
+  review_target "$KIND" "$comparison" || die "cannot identify review target"
+  HEADER="$HEADER"$'\nctrl-v viewed'
+  if [ ${#FILES[@]} -eq 0 ]; then
+    : > "$PREEN_STATE/files"
+    review_list >/dev/null
+    die "nothing to show ($KIND mode)"
+  fi
+  review_picker >/dev/null
+else
+  [ ${#FILES[@]} -gt 0 ] || die "nothing to show ($KIND mode)"
+  run_picker >/dev/null
+fi

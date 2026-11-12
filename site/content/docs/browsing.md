@@ -51,6 +51,25 @@ falls back to the index.
 
 With a **revision**, the list is exactly `git diff --name-only REV`.
 
+## Viewed files
+
+Press `ctrl-v` in a diff, PR, or worktree file picker to mark the current file
+as viewed. A dim `✓` appears beside it, and the header counts `12 of 40 viewed`.
+Press `ctrl-v` again to unmark it.
+
+Marks survive quitting and reopening the same review. Each repository and
+comparison has separate progress: the working tree, an explicit revision, a
+PR number, or a worktree path. A mark records the file's diff content; when
+that diff changes, the next list refresh clears the mark. Reopening the picker
+or returning from the editor refreshes the list. Markdown mode has no viewed
+marks.
+
+Review state lives in `preen/` under `$XDG_STATE_HOME`, or under
+`$HOME/.local/state` when that variable is unset or empty. It stays outside the
+checkout. Set `XDG_STATE_HOME` to an absolute directory outside your repositories
+to choose another location. Removing the `preen/` state directory clears saved
+review progress.
+
 ## `preen FILE.md` — render one file
 
 ```sh
@@ -131,6 +150,7 @@ one common mistake silently breaks it.
 | `ctrl-s` | toggle side-by-side / inline (diff, pr and worktrees modes) |
 | `enter` | open the full render in a pager |
 | `ctrl-e` | open in `$EDITOR` at the first diff hunk (Markdown opens at the top) |
+| `ctrl-v` | mark or unmark the current diff, PR, or worktree file as viewed |
 | `ctrl-d` / `ctrl-u` | scroll the preview 8 lines |
 | `pgdn` / `pgup` | scroll the preview half a page |
 | `shift-down` / `shift-up` | scroll the preview one line |
