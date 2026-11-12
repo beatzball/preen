@@ -1,0 +1,81 @@
+# Every job the default mktemp sweep in test-harness.sh runs: a test file, and
+# one path to a temporary directory or file inside it — the template name, then
+# the functions that asked for it, innermost first.
+#
+# The sweep must produce exactly this list. A line that stops being swept fails
+# the run, and so does a new one that is not here: add or remove the line in the
+# same change, so the review sees which call paths came or went. The failure
+# message prints the lines to add or remove.
+test-diff-list.sh preen-dep
+test-diff-list.sh preen-empty
+test-diff-list.sh preen-list+preen_list
+test-diff-list.sh preen-order
+test-diff-list.sh preen-shim+preen_list_raw
+test-diff-list.sh preen-shim+preen_list_raw+preen_list
+test-diff-list.sh preen-state+preen_state
+test-diff-list.sh preen-test+new_repo
+test-file.sh preen-dep
+test-file.sh preen-file
+test-file.sh preen-state+preen_state
+test-filenames.sh preen-dep
+test-filenames.sh preen-ed
+test-filenames.sh preen-edbin
+test-filenames.sh preen-gh+pr_run
+test-filenames.sh preen-list+preen_list
+test-filenames.sh preen-md
+test-filenames.sh preen-nofzfmd
+test-filenames.sh preen-prren
+test-filenames.sh preen-prsrc
+test-filenames.sh preen-raw
+test-filenames.sh preen-raw2
+test-filenames.sh preen-raw2t
+test-filenames.sh preen-shim+preen_list_raw
+test-filenames.sh preen-shim+preen_list_raw+pr_run
+test-filenames.sh preen-shim+preen_list_raw+preen_list
+test-filenames.sh preen-shim2+preen_list_raw2
+test-filenames.sh preen-state+preen_state
+test-filenames.sh preen-test+new_repo
+test-filenames.sh preen-wtroot
+test-filenames.sh preen-wtroot2
+test-pr.sh preen-dep
+test-pr.sh preen-gh
+test-pr.sh preen-list+preen_list
+test-pr.sh preen-shim+preen_list_raw+preen_list
+test-pr.sh preen-state
+test-pr.sh preen-test+new_repo
+test-release-gate.sh preen-dep
+test-release-gate.sh preen-gate
+test-stdin.sh preen-dep
+test-stdin.sh preen-notmp
+test-stdin.sh preen-r+rendered_by
+test-stdin.sh preen-test+new_repo
+test-version.sh preen-cbshim
+test-version.sh preen-dep
+test-version.sh preen-shim2+preen_list_raw2
+test-version.sh preen-test+new_repo
+test-version.sh preen-version
+test-version.sh preen-wtbox
+test-version.sh preen-wtlist
+test-width.sh preen-dep
+test-width.sh preen-state+preen_state
+test-width.sh preen-width
+test-worktrees.sh preen-dep
+test-worktrees.sh preen-lead
+test-worktrees.sh preen-lead-raw
+test-worktrees.sh preen-list+preen_list
+test-worktrees.sh preen-nl
+test-worktrees.sh preen-nl2
+test-worktrees.sh preen-nlonly
+test-worktrees.sh preen-nofzf
+test-worktrees.sh preen-oldgit
+test-worktrees.sh preen-scen
+test-worktrees.sh preen-scen-raw+scen_run
+test-worktrees.sh preen-shim+preen_list_raw
+test-worktrees.sh preen-shim+preen_list_raw+preen_list
+test-worktrees.sh preen-shim+preen_list_raw+scen_run
+test-worktrees.sh preen-stale
+test-worktrees.sh preen-stale-raw
+test-worktrees.sh preen-state+preen_state
+test-worktrees.sh preen-stonly
+test-worktrees.sh preen-test+new_repo
+test-worktrees.sh preen-wt

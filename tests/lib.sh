@@ -89,10 +89,30 @@ _preen_tmpfail() {
   exit 1
 }
 
+# The sweep in test-harness.sh fails one call at a time, and it has to know which
+# call it is looking at. The template name alone is not enough: new_repo and a
+# quiet helper of a test's own can share `preen-test`, and failing the first use
+# of the name never reaches the second caller. So every call says which
+# functions asked for it, innermost first: `preen-test+new_repo`, or
+# `preen-test+quiet_repo+setup`. The stand-in mktemp keys on that, and a call
+# that arrives WITHOUT it did not come through these helpers, which the sweep
+# reports as a raw mktemp. Outside the sweep nothing reads it.
+_preen_tmp_via() {
+  local _f
+  _preen_via="$1"
+  for _f in "${FUNCNAME[@]}"; do
+    case "$_f" in
+      _preen_tmp_via|mktmpd|mktmpf|main|source) ;;
+      *) _preen_via="$_preen_via+$_f" ;;
+    esac
+  done
+}
+
 mktmpd() {
   # mktmpd <varname> <name> -> sets <varname> to a fresh directory, or exits
   local _v="$1" _p
-  _p="$(mktemp -d "${TMPDIR:-/tmp}/$2.XXXXXX" 2>/dev/null)" || _p=""
+  _preen_tmp_via "$2"
+  _p="$(PREEN_MKTEMP_VIA="$_preen_via" mktemp -d "${TMPDIR:-/tmp}/$2.XXXXXX" 2>/dev/null)" || _p=""
   [ -n "$_p" ] && [ -d "$_p" ] || _preen_tmpfail "directory ($2)"
   eval "$_v=\$_p"
 }
@@ -100,7 +120,8 @@ mktmpd() {
 mktmpf() {
   # mktmpf <varname> <name> -> sets <varname> to a fresh file, or exits
   local _v="$1" _p
-  _p="$(mktemp "${TMPDIR:-/tmp}/$2.XXXXXX" 2>/dev/null)" || _p=""
+  _preen_tmp_via "$2"
+  _p="$(PREEN_MKTEMP_VIA="$_preen_via" mktemp "${TMPDIR:-/tmp}/$2.XXXXXX" 2>/dev/null)" || _p=""
   [ -n "$_p" ] && [ -f "$_p" ] || _preen_tmpfail "file ($2)"
   eval "$_v=\$_p"
 }
