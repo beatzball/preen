@@ -13,7 +13,7 @@ tests/run.sh          # the behavior suite
 `tests/run.sh` is not quick. Most of its time is `test-harness.sh`, which runs
 every other test file again, dozens of times, with `mktemp` failing at a
 different call each time, to prove the suite cannot damage your checkout. The
-whole run took about three and a half minutes on a busy laptop, and a sweep
+whole run took a little over four minutes on a busy laptop, and a sweep
 alone has taken more than six on a busier one. While you work, run only the files you are changing —
 `tests/run.sh worktrees` runs every file whose name contains `worktrees` — and
 run the whole suite once before you open the pull request.

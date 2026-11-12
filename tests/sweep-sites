@@ -50,6 +50,8 @@ test-pr.sh preen-list+preen_list
 test-pr.sh preen-shim+preen_list_raw+preen_list
 test-pr.sh preen-state
 test-pr.sh preen-test+new_repo
+test-prod-drift.sh preen-dep
+test-prod-drift.sh preen-drift
 test-release-gate.sh preen-dep
 test-release-gate.sh preen-gate
 test-stdin.sh preen-dep

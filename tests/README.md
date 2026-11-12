@@ -167,8 +167,8 @@ preen, and it is in three parts because they hold different things:
 
 - **the shapes, at the source.** Nothing may name `mktemp` outside `mktmpd`,
   `mktmpf` and `tmp_refused_for`, every `$(new_repo)` and `$(preen_state …)`
-  must carry `|| exit 1`, and nothing may resolve a path with `cd "$x" && pwd`
-  outside `resolve_dir`. These are greps over every file but the harness
+  must carry `|| exit 1`, no test may redefine a function `lib.sh` defines, and
+  nothing may resolve a path with `cd "$x" && pwd` outside `resolve_dir`. These are greps over every file but the harness
   itself — `lib.sh` included, by function, so a helper of its own is graded like
   a test. A new unguarded site is a source edit, and this is what refuses it the
   moment it is written.
@@ -200,16 +200,17 @@ the ones it got to.
 
 Then, by default:
 
-- a key made only of `lib.sh`'s helpers, such as `preen-test+new_repo`, is
-  failed at its FIRST use in each file. The helper's body is the same at every
-  call; what differs is the caller, and for the two helpers that hand back a
-  path that is what the `|| exit 1` rule in part 1 holds.
-- any other key — a call at a test's top level, or one with a test's own
-  function anywhere in its chain — is failed at EVERY use. A test's helper is
-  called from lines no rule reads, and one guarded call must not pass for an
+- a key made only of `new_repo` and `preen_state`, such as
+  `preen-test+new_repo`, is failed at its FIRST use in each file. The body is
+  the same at every call; what differs is the caller, and part 1 holds every
+  caller of those two: each capture carries `|| exit 1`, and no test may
+  redefine a function `lib.sh` defines. Part 1 and part 3 read the same list.
+- any other key — another `lib.sh` helper, a test's own function anywhere in
+  the chain, or a call at a test's top level — is failed at EVERY use. Its
+  callers are lines no rule reads, and one guarded call must not pass for an
   unguarded one later in the file.
 
-That is 97 jobs today, out of 136 helper calls in a clean pass. A test's own
+That is 130 jobs today, out of 138 helper calls in a clean pass. A test's own
 function named `main` is a frame like any other: only bash's own trailing
 `main` and `source` frames are dropped from a key. `PREEN_HARNESS_DEPTH=full`
 fails every use of every key, `lib.sh`'s helpers included, at one job per call.
@@ -230,9 +231,9 @@ like preen, because it runs in a fixture under `$TMPDIR`, not in the checkout;
 and a call that sets `PREEN_MKTEMP_VIA` itself is taken at its word. Neither is
 a slip anyone makes by accident.
 
-It is the slow half of the suite — more than all the other files together: ten
-clean runs and then 97 jobs of real fixture work, four at a time. The whole
-suite took about three and a half minutes on a laptop that was busy with other
+It is the slow half of the suite — more than all the other files together: one
+clean run per file and then 130 jobs of real fixture work, four at a time. The whole
+suite took a little over four minutes on a laptop that was busy with other
 work, and a sweep alone has taken more than six on a busier one, so it is not
 something to put behind a short timeout.
 `PREEN_HARNESS_JOBS=8 tests/run.sh` runs eight at a time if the machine has the
