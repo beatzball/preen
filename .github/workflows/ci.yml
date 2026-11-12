@@ -122,11 +122,9 @@ jobs:
           for f in bin/preen install.sh site/sync-assets.sh; do
             if bash -n "$f"; then echo "ok  $f"; else rc=1; fi
           done
-          if sh -n scripts/verify-site.sh; then
-            echo "ok  scripts/verify-site.sh"
-          else
-            rc=1
-          fi
+          for f in scripts/verify-site.sh scripts/check-prod-drift.sh; do
+            if sh -n "$f"; then echo "ok  $f"; else rc=1; fi
+          done
           # Every file is checked before the step gives up, so one run names
           # all of them rather than only the first.
           exit "$rc"
@@ -213,7 +211,11 @@ jobs:
       # write nothing.
       - name: Install the tools the suite drives (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y git-delta fzf
+        # Two lines, not `update && install`. The `&&` form is correct only
+        # while it is the whole step, for the reason on `Help output runs`.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-delta fzf
       - name: Install the tools the suite drives (macOS)
         if: runner.os == 'macOS'
         # No `brew update`: the runner image is already current, and updating
@@ -487,7 +489,18 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # ignore-error=true: a failed cache WRITE is a warning, not a failed
+          # build (#40). The cache only saves minutes, and this job gates
+          # deploy -- run 34792390915 lost a release to `error writing layer
+          # blob: not_found` from the GitHub cache, on an image that was fine.
+          # The flag covers the export only: a real build or probe failure
+          # still fails the job. It is a BuildKit cache-exporter attribute, so
+          # the version that matters is BuildKit's, not this action's: CI's
+          # setup-buildx starts moby/buildkit:buildx-stable-1, v0.34.2 on
+          # 2026-11-10, and the same version with a cache-to aimed at a dead
+          # registry exits 1 without the flag and 0 with it, logging that
+          # same `error writing layer blob`.
+          cache-to: type=gha,mode=max,ignore-error=true
       - name: Run container
         run: docker run -d --rm -p 8080:80 --name preen-docs-smoke preen-docs:ci
       - name: Probe container
@@ -508,6 +521,10 @@ jobs:
   # Deploy only when a push to main actually changed the site. A change to
   # bin/preen or the installer cannot alter what preening.dev serves, so it
   # should not spend a build.
+  #
+  # The gate has a blind side: a deploy that this job never ran -- because a
+  # job in `needs:` failed -- is not retried by the next push unless that push
+  # also touches site/. .github/workflows/prod-drift.yml watches for that.
   #
   # This job FAILS if COOLIFY_WEBHOOK_URL, COOLIFY_API_TOKEN or PROD_BASE_URL
   # is missing. That is deliberate -- a silent skip would leave the site

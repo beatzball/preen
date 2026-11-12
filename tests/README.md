@@ -63,6 +63,7 @@ green for the wrong reason.
 | `test-pr.sh` | four `gh` calls whatever the file count, previews slice the cache, read-only |
 | `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
 | `test-width.sh` | the `-w` every render outside fzf asks glow for: the terminal's own width on a 66- and a 132-column pty, for a named file, the enter key and piped input; `COLUMNS` still winning; 80 with no terminal on any fd |
+| `test-prod-drift.sh` | `scripts/check-prod-drift.sh`, the scheduled check that production serves main's `site/`: passes when production lags `main` only by non-site commits, fails on a missed site change past the grace period, measures that grace from the oldest missed change, and fails on a commit not on `main` or a `version.json` with no commit (#40, #43) |
 
 ## Eighteen bugs these exist to hold shut
 
