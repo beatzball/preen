@@ -1164,9 +1164,10 @@ run_picker() {
     # Canceling only on load can discard a just-published poll reload after an
     # older ctrl-v/ctrl-e list has already been produced.
     edit_action="bg-cancel+$edit_action"
-    # No selection skips the transform, so an empty picker keeps its waiter.
+    # printf alone would emit an action even when fzf expands {1} to empty.
+    # Only a nonempty ID may cancel the waiter and start a viewed reload.
     watch_args=(--track --id-nth=1
-      --bind "ctrl-v:transform(printf 'bg-cancel+reload-sync(\"\$PREEN_SELF\" --review-file viewed %s)' {1})"
+      --bind "ctrl-v:transform(selected_id={1}; if [ -n \"\$selected_id\" ]; then printf 'bg-cancel+reload-sync(\"\$PREEN_SELF\" --review-file viewed %s)' \"\$selected_id\"; fi)"
       --bind 'load:bg-cancel+transform-header("$PREEN_SELF" --watch-header)+refresh-preview+bg-transform("$PREEN_SELF" --watch-await)')
     HEADER="$(watch_header)"
   fi

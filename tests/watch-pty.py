@@ -170,7 +170,10 @@ def finish(key, label):
     check(not state.exists(), label + " removes temporary picker state")
     os.close(master)
     pollers.clear()
-    for name in ("state", "loads", "selection", "query", "stats"):
+    for name in ("state", "loads", "selection", "query", "stats",
+                 "hold-poll", "poll-held", "release-poll", "hold-viewed",
+                 "viewed-held", "release-viewed", "hold-editor", "editor-held",
+                 "release-editor", "editor-args"):
         (out / name).unlink(missing_ok=True)
 
 
@@ -215,12 +218,25 @@ try:
     (repo / " a-first.txt").unlink()
     spawn(["watch"])
     check(not any(names()), "watch starts on a clean repository")
+    empty_loads = loads()
+    empty_pid = (state / "watch-pid").read_bytes()
     os.write(master, b"\x16")
     check(picker_stats() == (0, 0), "viewed key on an empty picker leaves it empty")
     check(until(lambda: len(waiter_rows()) == 1), "viewed key without a selection keeps polling")
+    check(loads() == empty_loads and (state / "watch-pid").read_bytes() == empty_pid,
+          "empty viewed key does not restart the waiter")
+    (out / "hold-poll").touch()
     before = loads()
     (repo / "first.txt").write_text("first change\n")
-    check(until(lambda: loads() > before and picker_stats() == (1, 1)), "first change enters actual picker after empty viewed key")
+    check(until(lambda: (out / "poll-held").exists()), "first publication is held before reload delivery")
+    pending_pid = (state / "watch-pid").read_bytes()
+    check(picker_stats() == (0, 0), "picker is still empty while first publication is pending")
+    os.write(master, b"\x16")
+    check(picker_stats() == (0, 0), "empty viewed key is processed during pending publication")
+    check(loads() == before and (state / "watch-pid").read_bytes() == pending_pid
+          and len(waiter_rows()) == 1, "empty viewed key preserves the pending producer")
+    (out / "release-poll").touch()
+    check(until(lambda: loads() > before and picker_stats() == (1, 1)), "first published file reaches actual picker without another edit")
     finish(b"\x03", "Ctrl-C")
     # Both raw paths share the old delimiter prefix. Their safe IDs must stay
     # distinct through membership changes, viewed badges and query filtering.
