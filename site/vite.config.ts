@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import litroContentPlugin from '@beatzball/litro/vite';
+import litroContentPlugin, { litroEntryPlugin } from '@beatzball/litro/vite';
 
 /**
  * Keep the server-only modules out of the client build entirely.
@@ -42,7 +42,10 @@ function stubServerOnlyModulesInClientBuild() {
 }
 
 export default defineConfig({
-  plugins: [stubServerOnlyModulesInClientBuild(), litroContentPlugin()],
+  // litroEntryPlugin() keeps every other chunk from importing app.js by name,
+  // so the page can load it as app.js?v=<content hash> and a deploy reaches a
+  // browser that still holds the old entry (litro 0.18.0, issue 253).
+  plugins: [stubServerOnlyModulesInClientBuild(), litroContentPlugin(), litroEntryPlugin()],
   base: process.env.LITRO_BASE_PATH ? `${process.env.LITRO_BASE_PATH}/_litro/` : '/_litro/',
   resolve: {
     // NOTE: no 'source' condition. An installed package's TypeScript is
