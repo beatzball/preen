@@ -130,7 +130,7 @@ one common mistake silently breaks it.
 |---|---|
 | `ctrl-s` | toggle side-by-side / inline (diff, pr and worktrees modes) |
 | `enter` | open the full render in a pager |
-| `ctrl-e` | open in `$EDITOR` |
+| `ctrl-e` | open in `$EDITOR` at the first diff hunk (Markdown opens at the top) |
 | `ctrl-d` / `ctrl-u` | scroll the preview 8 lines |
 | `pgdn` / `pgup` | scroll the preview half a page |
 | `shift-down` / `shift-up` | scroll the preview one line |
@@ -141,6 +141,25 @@ one common mistake silently breaks it.
 
 Typing filters the list, as in any fzf picker. The arrow keys move the cursor
 and the list cycles at both ends.
+
+### Open at the change
+
+`ctrl-e` opens at the new-side start of the first diff hunk, including its
+context lines. New files start at line 1. It uses the same comparison as the
+preview: staged and unstaged changes together, a supplied revision, a
+worktree's merge-base, or the cached PR diff.
+
+vi, vim, nvim, nano, emacs, emacsclient, micro and Helix (`hx` or `helix`)
+receive `+LINE FILE`. VS Code (`code` or `code-insiders`) receives
+`--goto FILE:LINE`; Zed receives `FILE:LINE`. `$EDITOR` can include options,
+such as `code --wait`. Unknown editors open the file plainly. If a recognized
+editor rejects the jump invocation, preen retries with just the file.
+
+Markdown has no diff and opens plainly. Binary files and changes without a
+hunk also open plainly. A deleted path keeps the plain editor invocation;
+there is no existing file to jump into. In PR mode, this still opens your
+checkout's copy of the path, using the line number from the PR; your local
+copy may have different lines.
 
 ### `enter` versus the preview
 

@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`ctrl-e` opens at the first diff hunk** (#55) in recognized editors,
+  using the same comparison as the preview. Unknown editors and Markdown
+  still open plainly; PR mode opens your local copy of the file.
+
 ## [0.2.0]
 
 ### Added

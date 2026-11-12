@@ -194,8 +194,8 @@ printf '%s\n' "\$1" >> "$edlog"
 [ -e "\$1" ] && printf 'exists\n' >> "$edlog" || printf 'missing\n' >> "$edlog"
 EOF
 chmod +x "$edbin/ed"
-( export PREEN_WT_DIR="$wt" EDITOR="$edbin/ed"
-  sh -c "$(printf '%s' "$cmd" | sed "s|{}|'wt\"quote.txt'|")" ) >/dev/null 2>&1
+( export PREEN_WT_DIR="$wt" EDITOR="$edbin/ed" PREEN_SELF="$PREEN" PREEN_STATE="$swt"
+  sh -c "$(printf '%s' "$cmd" | sed "s|{}|'wt\"quote.txt'|g")" ) >/dev/null 2>&1
 
 assert_eq "$(sed -n 1p "$edlog")" "1"      "ctrl-e hands the editor exactly one argument"
 assert_eq "$(sed -n 3p "$edlog")" "exists" "ctrl-e opens a file that is really there"

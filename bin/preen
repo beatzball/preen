@@ -156,20 +156,24 @@ collect_files() {
   done
 }
 
-render_diff() {
-  local width="$1" file="$2" mode="$3" rev="$4" dir="${5:-}"
+file_diff() {
+  local file="$1" rev="$2" dir="${3:-}" color="${4:-always}"
   {
     if ! gitw "$dir" ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
       # untracked: show the whole file as an addition
-      gitw "$dir" diff --no-index --color=always -- /dev/null "$file" 2>/dev/null
+      gitw "$dir" diff --no-index --color="$color" -- /dev/null "$file" 2>/dev/null
     elif [ -n "$rev" ]; then
-      gitw "$dir" diff --color=always "$rev" -- "$file"
+      gitw "$dir" diff --color="$color" "$rev" -- "$file"
     elif gitw "$dir" rev-parse --verify -q HEAD >/dev/null 2>&1; then
-      gitw "$dir" diff --color=always HEAD -- "$file"   # staged and unstaged together
+      gitw "$dir" diff --color="$color" HEAD -- "$file"   # staged and unstaged together
     else
-      gitw "$dir" diff --color=always --cached -- "$file"   # repo with no commit yet
+      gitw "$dir" diff --color="$color" --cached -- "$file"   # repo with no commit yet
     fi
-  } | delta_pipe "$mode" "$width"
+  }
+}
+
+render_diff() {
+  file_diff "$2" "$4" "${5:-}" | delta_pipe "$3" "$1"
 }
 
 # the one delta invocation, shared by render_diff and the stdin path
@@ -650,8 +654,62 @@ render_stdin() {
   fi
 }
 
+# ctrl-e reads the same diff as the preview, before delta adds its formatting.
+# Consume the whole stream: exiting awk at the first hunk can SIGPIPE git under
+# pipefail. No hunk (binary, empty or rename-only) means a plain open.
+first_hunk_line() {
+  awk '
+    !line && /^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@/ {
+      line = $3
+      sub(/^\+/, "", line)
+      sub(/,.*/, "", line)
+      if (line < 1) line = 1
+    }
+    END { if (line) print line }
+  '
+}
+
+edit_file() {
+  local file="$1" path="$2" kind dir rev line="" command="${EDITOR:-vi}" name
+  local editor=()
+  # Keep an executable path containing spaces whole. Otherwise retain the
+  # usual EDITOR="vim -f" convention, without eval or filename glob expansion.
+  if [ -x "$command" ]; then editor=("$command")
+  else IFS=$' \t' read -r -a editor <<< "$command"; fi
+  [ "${#editor[@]}" -gt 0 ] || editor=(vi)
+  name="${editor[0]##*/}"
+  kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
+  if [ "$kind" != md ] && [ -f "$path" ]; then
+    case "$name" in
+      vi|vim|nvim|nano|emacs|emacsclient|micro|hx|helix|code|code-insiders|zed)
+        if [ "$kind" = pr ]; then
+          line="$(pr_slice "$file" "$PREEN_STATE/pr.diff" | first_hunk_line)"
+        elif [ "$kind" = diff ]; then
+          dir="$(cat "$PREEN_STATE/dir" 2>/dev/null || echo '')"
+          rev="$(cat "$PREEN_STATE/rev" 2>/dev/null || echo '')"
+          line="$(file_diff "$file" "$rev" "$dir" never | first_hunk_line)"
+        fi ;;
+    esac
+  fi
+  # A filename beginning with an editor option or +command is still a file.
+  case "$path" in [-+]*) path="./$path" ;; esac
+  if [ -n "$line" ]; then
+    case "$name" in
+      code|code-insiders) "${editor[@]}" --goto "$path:$line" && return ;;
+      zed)               "${editor[@]}" "$path:$line" && return ;;
+      *)                 "${editor[@]}" "+$line" "$path" && return ;;
+    esac
+    # A wrapper or older editor may reject the jump syntax. Still open the
+    # file, using precisely the plain invocation unknown editors get.
+  fi
+  "${editor[@]}" "$path"
+}
+
 # ---- hooks fzf calls back into ----------------------------------------------
 case "${1:-}" in
+  --edit)
+    edit_file "$2" "${3:-$2}"
+    exit $? ;;
   --preview)
     f="$2"; w="${FZF_PREVIEW_COLUMNS:-80}"
     kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
@@ -748,7 +806,8 @@ keys inside the picker
            start in inline with PREEN_LAYOUT=inline, or by default with
            git config preen.layout inline (add --global for every repo)
   enter    open the full render in a pager
-  ctrl-e   open in $EDITOR
+  ctrl-e   open in $EDITOR at the first diff hunk (known editors; md at top)
+           unknown editors open plainly; pr opens your own checkout copy
   ctrl-/   hide or show the preview
   esc      quit, or in worktrees mode go back one level
   ctrl-c   quit
@@ -822,7 +881,7 @@ run_picker() {
     --color 'header:#8a84b0,info:#8a84b0,spinner:#7c6ff0,marker:#3a3558' \
     --bind "ctrl-s:execute-silent(\"\$PREEN_SELF\" --toggle)+refresh-preview" \
     --bind "enter:$ENTER" \
-    --bind "ctrl-e:execute(\${EDITOR:-vi} $EDIT)" \
+    --bind "ctrl-e:execute(\"\$PREEN_SELF\" --edit $PICK $EDIT)" \
     --bind "ctrl-c:execute-silent(touch '$PREEN_STATE/quit')+abort" \
     --bind 'ctrl-/:toggle-preview' \
     --bind 'ctrl-d:preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down' \
@@ -873,7 +932,7 @@ wt_loop() {
       export PREEN_WT_DIR="$dir"
       EDIT='"$PREEN_WT_DIR"/{}'
       ENTER="execute(\"\$PREEN_SELF\" --show {})"
-      HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc back'
+      HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit hunk · esc back'
     else
       echo none > "$PREEN_STATE/kind"
       FILES=("$branch has changed nothing against its merge-base")
@@ -948,7 +1007,7 @@ elif [ "$KIND" = pr ]; then
     [ -n "$prfile" ] && FILES+=("$prfile")
   done < <(gh pr diff "$PRNUM" --name-only 2>/dev/null)
   LABEL=" preen · pr #$PRNUM · $(printf '%s' "$PRTITLE" | cut -c1-60) "
-  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc quit'
+  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit hunk · esc quit'
 else
   command -v delta >/dev/null || die "delta is not installed"
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
@@ -970,7 +1029,7 @@ else
                         gitw "" ls-files --others --exclude-standard -z
                       } | LC_ALL=C sort -z -u)
   fi
-  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc quit'
+  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit hunk · esc quit'
 fi
 
 [ ${#FILES[@]} -gt 0 ] || die "nothing to show ($KIND mode)"
