@@ -568,8 +568,10 @@ looks_like_diff() {
 # older one for years. An unknown flag does not kill less: it prints
 # `There is no mouse option ("less --help" for help)` -- no dashes, that form
 # is only for the interactive `--` command -- and carries on. From 572 it waits
-# for RETURN first, which would put a prompt in front of every render, and that
-# is reason enough not to send the flag blind.
+# for RETURN first. That cannot happen through preen: every less from 546
+# names --mouse in its help, so a less new enough to wait always passes the
+# probe. The probe stands on simpler ground: a flag that only some versions
+# know is checked before it is used.
 #
 # The probe is a case over a command substitution, NOT `less --help | grep -q`.
 # `grep -q` exits at the first match, the rest of less's output takes SIGPIPE,
@@ -585,13 +587,14 @@ looks_like_diff() {
 # preview beside it.
 #
 # The cost is worth stating, precisely. less has no text selection of its own.
-# It asks for modes 1000 and 1006, and from 678 for 1002 as well -- so while it
-# holds the mouse, a plain drag either does nothing (668 and earlier) or
-# scrolls the file (678 and later). Either way it does not select. To select
-# and copy, hold whichever modifier your terminal uses to bypass mouse
-# reporting: shift in xterm, option in iTerm2. Under tmux the drag is unchanged
-# either way, because tmux already forwarded it. A left click sets a mark, a
-# right click jumps back, and a click on an OSC 8 link opens a less prompt.
+# It asks for click reporting (1000, SGR-encoded via 1006) and not for motion
+# (1002/1003) before 678, which adds 1002 -- so while it holds the mouse, a
+# plain drag either does nothing (668 and earlier) or scrolls the file (678
+# and later). Either way it does not select. To select and copy, hold
+# whichever modifier your terminal uses to bypass mouse reporting: shift in
+# xterm, option in iTerm2. Under tmux the drag is unchanged either way,
+# because tmux already forwarded it. A left click sets a mark, a right click
+# jumps back, and a click on an OSC 8 link opens a less prompt.
 pager() {
   [ -t 1 ] && command -v less >/dev/null || { cat; return; }
   case "$(less --help 2>/dev/null)" in
