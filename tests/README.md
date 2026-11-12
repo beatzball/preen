@@ -62,6 +62,7 @@ green for the wrong reason.
 | `test-filenames.sh` | accented names, spaces, a leading dash, and the quote, backslash, tab and newline cases from #3 — in diff, md, pr and both levels of worktrees, plus a tab in a worktree's own directory name, a dash-leading directory in md mode, a PR file named ` b/x.md`, the `--read0` fzf is given and the `ctrl-e` binding a worktree path is spent through |
 | `test-pr.sh` | four `gh` calls whatever the file count, previews slice the cache, read-only |
 | `test-file.sh` | `preen FILE.md` and the picker's enter key: paged on a terminal, plain into a pipe, the glow gate, no less installed |
+| `test-layout.sh` | the starting layout (#8): `PREEN_LAYOUT` beats the repository's `preen.layout`, which beats the global one, which beats side-by-side — for the picker's state file, its previews, `ctrl-s` after start, and piped input. Only the exact word `inline` counts; outside a repository the global value still applies, and neither that nor a config git cannot read (md mode outside a repository, and piped input) prints anything |
 | `test-width.sh` | the `-w` every render outside fzf asks glow for: the terminal's own width on a 66- and a 132-column pty, for a named file, the enter key and piped input; `COLUMNS` still winning; 80 with no terminal on any fd |
 
 ## Eighteen bugs these exist to hold shut
