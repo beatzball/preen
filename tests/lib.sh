@@ -104,16 +104,20 @@ _preen_tmpfail() {
 # that arrives WITHOUT it did not come through these helpers, which the sweep
 # reports as a raw mktemp. Outside the sweep nothing reads it.
 #
-# FUNCNAME is [0] this, [1] mktmpd or mktmpf, then the callers, then bash's own
-# `main` frame last. Only that last frame is dropped, by position. Dropping
-# frames by NAME let a test's own function called `main` share the bare
-# top-level key, so its calls were never failed on their own. A `source` frame
-# is kept for the same reason — a test may name a function `source` too — so a
-# call made while lib.sh is being sourced reads `preen-dep+source`.
+# FUNCNAME is [0] this, [1] mktmpd or mktmpf, then the callers, and in a script
+# file bash's own `main` frame last. Only that frame is dropped, and it is told
+# apart by its line, not its name: bash's own frame was "called" from line 0,
+# while a test's function named `main` was called from a real line — including
+# under `bash -c`, where there is no frame of bash's own and a user `main` is
+# last. Dropping by NAME let such a function share the bare top-level key, so
+# its calls were never failed on their own. A `source` frame stays for the same
+# reason, so a call made while lib.sh is being sourced reads `preen-dep+source`.
 _preen_tmp_via() {
   local _i=2 _n=${#FUNCNAME[@]}
   _preen_via="$1"
-  [ "${FUNCNAME[_n-1]}" = main ] && _n=$((_n - 1))
+  if [ "${FUNCNAME[_n-1]}" = main ] && [ "${BASH_LINENO[_n-1]}" = 0 ]; then
+    _n=$((_n - 1))
+  fi
   while [ "$_i" -lt "$_n" ]; do
     _preen_via="$_preen_via+${FUNCNAME[_i]}"; _i=$((_i + 1))
   done

@@ -97,7 +97,8 @@ assert_eq "$offenders" "" \
 # one thing each. A second `mktmpd() {` further down would be a new body under an
 # allowed name, and would also be the one bash runs.
 for h in mktmpd mktmpf tmp_refused_for resolve_dir; do
-  n="$(grep -c "^$h()" "$PREEN_ROOT/tests/lib.sh" || true)"
+  n="$(grep -cE "^[[:space:]]*(function[[:space:]]+$h([[:space:]]|\(|\$)|$h[[:space:]]*\(\))" \
+         "$PREEN_ROOT/tests/lib.sh" || true)"
   assert_eq "$n" "1" "lib.sh defines $h exactly once"
 done
 
@@ -123,7 +124,9 @@ lib_fns=" $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*\(\)' "$PREEN_ROOT/tests/lib.sh" \
             | tr -d '()' | tr '\n' ' ') "
 shadows=""
 for t in "$PREEN_ROOT"/tests/test-*.sh; do
-  for fn in $(grep -oE '^[[:space:]]*(function[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\)' "$t" \
+  # Both forms bash takes: `name()`, and `function name` with or without the
+  # parentheses, its brace on the same line or the next.
+  for fn in $(grep -oE '^[[:space:]]*(function[[:space:]]+[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\))' "$t" \
                 | sed -E 's/^[[:space:]]*(function[[:space:]]+)?//; s/[[:space:]]*\(\)$//'); do
     case "$lib_fns" in *" $fn "*) shadows="$shadows ${t##*/}:$fn" ;; esac
   done

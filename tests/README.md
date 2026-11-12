@@ -167,7 +167,8 @@ preen, and it is in three parts because they hold different things:
 
 - **the shapes, at the source.** Nothing may name `mktemp` outside `mktmpd`,
   `mktmpf` and `tmp_refused_for`, every `$(new_repo)` and `$(preen_state …)`
-  must carry `|| exit 1`, no test may redefine a function `lib.sh` defines, and
+  must carry `|| exit 1`, no test may redefine a function `lib.sh` defines (in either of bash's
+  spellings), and
   nothing may resolve a path with `cd "$x" && pwd` outside `resolve_dir`. These are greps over every file but the harness
   itself — `lib.sh` included, by function, so a helper of its own is graded like
   a test. A new unguarded site is a source edit, and this is what refuses it the
@@ -212,8 +213,9 @@ Then, by default:
 
 That is 130 jobs today, out of 138 helper calls in a clean pass. A test's own
 function named `main` or `source` is a frame like any other: only bash's own
-last `main` frame is dropped from a key, so a call made while `lib.sh` is being
-sourced reads `preen-dep+source`. `PREEN_HARNESS_DEPTH=full`
+`main` frame is dropped from a key, and it is told apart by being called from
+line 0, not by its name. A call made while `lib.sh` is being sourced reads
+`preen-dep+source`. `PREEN_HARNESS_DEPTH=full`
 fails every use of every key, `lib.sh`'s helpers included, at one job per call.
 
 `tests/sweep-sites` pins the set of keys, one line per file and key. The sweep
