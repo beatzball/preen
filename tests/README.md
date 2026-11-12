@@ -191,32 +191,51 @@ walks up its parent processes to see whose it is: preen's own calls and git's ar
 let through, and anything else — a nameless `mktemp -d` in `new_repo`, a raw
 call however it is spelled — fails the run.
 
-**What it covers, exactly.** By default the FIRST use of every key in every
-file: 73 jobs today, against a few hundred real `mktemp` calls, because
-`new_repo` and the list helpers are called many times over. Two helpers that
-share a template name are two keys, so each is failed at its own first call. What
-the default does not reach is the second *line* that takes the same path, which
-is what the `|| exit 1` rule in part 1 is for. `PREEN_HARNESS_DEPTH=full` fails
-every use of every key instead — `lib.sh`'s helpers included, to the last call —
-at one job per call.
+**What it covers, exactly.** The clean runs use a copy of the whole checkout —
+everything git tracks, and new files not yet added — so a test that branches on
+`VERSION` or `scripts/` takes the same branch it takes in your checkout. A clean
+run must finish with exit 0 and no `FAIL` line, or the calls it counted are only
+the ones it got to.
 
-`tests/sweep-sites` pins the default job list, one line per job. The sweep must
-produce exactly that list: a job that stops existing fails the run instead of
-quietly shrinking it, and a new one fails until its line is added, so the review
-sees which call paths came or went. The failure prints the lines to add or
-remove.
+Then, by default:
+
+- a key made only of `lib.sh`'s helpers, such as `preen-test+new_repo`, is
+  failed at its FIRST use in each file. The helper's body is the same at every
+  call; what differs is the caller, and for the two helpers that hand back a
+  path that is what the `|| exit 1` rule in part 1 holds.
+- any other key — a call at a test's top level, or one with a test's own
+  function anywhere in its chain — is failed at EVERY use. A test's helper is
+  called from lines no rule reads, and one guarded call must not pass for an
+  unguarded one later in the file.
+
+That is 97 jobs today, out of 136 helper calls in a clean pass. A test's own
+function named `main` is a frame like any other: only bash's own trailing
+`main` and `source` frames are dropped from a key. `PREEN_HARNESS_DEPTH=full`
+fails every use of every key, `lib.sh`'s helpers included, at one job per call.
+
+`tests/sweep-sites` pins the set of keys, one line per file and key. The sweep
+must produce exactly that set: a key that stops existing fails the run instead
+of quietly shrinking it, and a new one fails until its line is added, so the
+review sees which call paths came or went. The failure prints the lines to add
+or remove.
 
 Every job also reports whether its failure actually **fired**, and one that did
 not fails the run. Without that a job whose file died earlier comes back green
 having graded nothing, which is how two earlier versions of this file looked
 healthy while holding almost nothing.
 
-It is the slow half of the suite — more than all the other files together: nine
-clean runs and then 73 jobs of real fixture work, four at a time. On an idle
-machine the whole suite takes about three minutes; on a busy one it has taken
-more than six. `PREEN_HARNESS_JOBS=8 tests/run.sh` widens the batch if the
-machine has the cores, and `tests/run.sh NAME` runs one file without the sweep
-while you work.
+What it does not see, on purpose: a stub script a test writes is let through
+like preen, because it runs in a fixture under `$TMPDIR`, not in the checkout;
+and a call that sets `PREEN_MKTEMP_VIA` itself is taken at its word. Neither is
+a slip anyone makes by accident.
+
+It is the slow half of the suite — more than all the other files together: ten
+clean runs and then 97 jobs of real fixture work, four at a time. The whole
+suite took about three and a half minutes on a laptop that was busy with other
+work, and a sweep alone has taken more than six on a busier one, so it is not
+something to put behind a short timeout.
+`PREEN_HARNESS_JOBS=8 tests/run.sh` runs eight at a time if the machine has the
+cores, and `tests/run.sh NAME` runs one file without the sweep while you work.
 
 ## Writing a new one
 

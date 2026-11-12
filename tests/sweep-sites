@@ -1,6 +1,7 @@
-# Every job the default mktemp sweep in test-harness.sh runs: a test file, and
-# one path to a temporary directory or file inside it — the template name, then
-# the functions that asked for it, innermost first.
+# Every key the mktemp sweep in test-harness.sh fails: a test file, and one path
+# to a temporary directory or file inside it — the template name, then the
+# functions that asked for it, innermost first. tests/README.md says which uses
+# of each key are failed.
 #
 # The sweep must produce exactly this list. A line that stops being swept fails
 # the run, and so does a new one that is not here: add or remove the line in the
@@ -37,6 +38,12 @@ test-filenames.sh preen-state+preen_state
 test-filenames.sh preen-test+new_repo
 test-filenames.sh preen-wtroot
 test-filenames.sh preen-wtroot2
+test-layout.sh preen-dep
+test-layout.sh preen-layout-gcfg
+test-layout.sh preen-layout-home
+test-layout.sh preen-layout-out
+test-layout.sh preen-layout-shim
+test-layout.sh preen-test+new_repo
 test-pr.sh preen-dep
 test-pr.sh preen-gh
 test-pr.sh preen-list+preen_list

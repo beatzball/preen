@@ -68,7 +68,11 @@ rule_hits() {
            /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*\{[[:space:]]*$/ {
              fn = $0; sub(/\(.*/, "", fn); next
            }
-           /^}/ { fn = "" }
+           # Anything else that starts a function — a one-liner — or closes
+           # one, indented or not, ends the allowed scope. Ending it early only
+           # makes the rule stricter.
+           /^[A-Za-z_][A-Za-z0-9_]*\(\)/ { fn = "" }
+           /^[[:space:]]*}/ { fn = "" }
            /^[[:space:]]*#/ { next }
            $0 ~ ENVIRON["PREEN_RULE"] {
              if (FILENAME == "lib.sh" && fn != "" \
@@ -187,13 +191,12 @@ assert_eq "$?" "1" "and exits rather than writing its state to the filesystem ro
 # moves with the environment — a git hook that calls mktemp shifts every number
 # after it — while the keys are names the source spells out.
 #
-# WHAT THIS COVERS, exactly. By default, the FIRST use of every key in every
-# file: every distinct path to a helper, but not every line that takes it — a
-# helper called from twenty places is failed at the first. tests/sweep-sites
-# lists those jobs, one per line, and the sweep must produce exactly that list:
-# a job that stops existing fails the run instead of passing quietly.
-# PREEN_HARNESS_DEPTH=full fails every use of every key instead — lib.sh's
-# helpers included, to the last call — which is several hundred jobs.
+# WHAT THIS COVERS, exactly. By default, a key made only of lib.sh's helpers is
+# failed at its FIRST use in each file, and every other key at EVERY use — see
+# lib_only below for why. tests/sweep-sites lists the keys, one file and key per
+# line, and the sweep must produce exactly that set: a key that stops existing
+# fails the run instead of passing quietly. PREEN_HARNESS_DEPTH=full fails every
+# use of every key, lib.sh's helpers included, to the last call.
 #
 # Every job also reports whether its failure actually FIRED. A job whose file
 # died earlier comes back having tested nothing, and that fails the run too.
@@ -208,6 +211,13 @@ real_mktemp="$(command -v mktemp)"
 # own calls and git's (a hook can call mktemp) are not this suite's business; any
 # other is a raw mktemp, and is written down — "unknown" included, because a
 # call nobody can place is not one to wave through.
+#
+# Two things this does not see, on purpose. A stub script a test writes (a fake
+# fzf, say) is "script", like preen: it runs in preen's cwd, a fixture under
+# TMPDIR, so an empty path there lands in the fixture, not the checkout — and
+# part 1 still reads the heredoc that wrote it. And a call that sets
+# PREEN_MKTEMP_VIA itself is taken at its word. That is not a slip anyone makes
+# by accident; it is a line a reviewer reads.
 cat > "$shim/mktemp" <<EOF
 #!/bin/sh
 owner_of() {
@@ -272,9 +282,21 @@ chmod +x "$shim/mktemp"
 # The pristine template: a git repository, because a stray `git -C ""` has to
 # have something to damage and be visible when it does. One commit, and a file
 # with an uncommitted edit — work in tests/ is exactly what the rm -rf destroyed.
+#
+# The whole checkout, not only bin/ and tests/. A test may branch on what the
+# checkout holds — test-version.sh on VERSION, test-release-gate.sh on scripts/
+# — and in a copy without them those branches never ran, so a call inside one
+# had no job and nothing said so. Files git ignores (site/node_modules, dist)
+# stay out; new files nobody has added yet come in, so a test being written is
+# swept before its first commit. Outside a git checkout, everything but .git.
 tmpl="$box/template"
 mkdir -p "$tmpl"
-( cd "$PREEN_ROOT" && tar -cf - bin tests ) | tar -x -C "$tmpl"
+if git -C "$PREEN_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  ( cd "$PREEN_ROOT" && git ls-files -z --cached --others --exclude-standard \
+      | tar --null -T - -cf - ) | tar -x -C "$tmpl"
+else
+  ( cd "$PREEN_ROOT" && tar -cf - --exclude ./.git . ) | tar -x -C "$tmpl"
+fi
 git init -q -b main "$tmpl"
 printf 'uncommitted work nobody wants deleted\n' > "$tmpl/tests/scratch.txt"
 tgit -C "$tmpl" add -A
@@ -304,8 +326,8 @@ run_job() {
   # run_job <file> <key> <nth> <slot> -> a verdict line in $box/out.<slot>
   #
   # A key of `-` is the clean run: nothing fails, the counts are kept as
-  # $box/counts.<file>, and the file has to finish with exit 0, or the counts
-  # are only the part of it that ran.
+  # $box/counts.<file>, and the file has to finish with exit 0 and no FAIL
+  # line, or the counts are only the part of it that ran.
   #
   # Every scratch path this needs — the run's TMPDIR, the shim's counters and
   # logs, the marker saying the failure fired — lives OUTSIDE the copy being
@@ -318,7 +340,7 @@ run_job() {
   # job runs nothing the clean run of its file did not already run, up to the
   # one call it fails.
   local f="$1" key="$2" nth="$3" slot="$4"
-  local pen="$box/s$slot" work="$box/s$slot/checkout" out="$box/out.$slot" rc raw=""
+  local pen="$box/s$slot" work="$box/s$slot/checkout" out="$box/out.$slot" rc nfail raw=""
   rm -rf "$pen"; mkdir -p "$pen/tmp" "$pen/counts"; : > "$pen/raw"
   [ "$key" = - ] && raw="$pen/raw"
   cp -R "$tmpl" "$work"
@@ -329,18 +351,23 @@ run_job() {
       && TMPDIR="$pen/tmp" PREEN_MKTEMP_COUNTS="$pen/counts" \
          PREEN_MKTEMP_FAIL_SITE="$key" PREEN_MKTEMP_FAIL_NTH="$nth" \
          PREEN_MKTEMP_FIRED="$pen/fired" PREEN_MKTEMP_RAW="$raw" \
-         PATH="$shim:$PATH" bash "$f" </dev/null >/dev/null 2>&1 )
+         PATH="$shim:$PATH" bash "$f" </dev/null >"$pen/log" 2>&1 )
   rc=$?
   if [ "$(manifest "$work")" != "$tmpl_manifest" ]; then
     printf 'DAMAGED %s %s #%s\n' "$f" "$key" "$nth" > "$out"
   elif [ -s "$pen/raw" ]; then
     printf 'RAW %s %s #%s: %s\n' "$f" "$key" "$nth" "$(head -1 "$pen/raw")" > "$out"
   elif [ "$key" = - ]; then
-    if [ "$rc" -eq 0 ]; then
+    # A clean run has to be a passing run as well as a finished one. A file that
+    # cannot do its job in the copy — the release gate with no scripts/, once —
+    # exits 0 with dozens of FAIL lines and counts only the calls it got to.
+    nfail="$(grep -c '^  FAIL' "$pen/log" || true)"
+    if [ "$rc" -eq 0 ] && [ "${nfail:-0}" -eq 0 ]; then
       rm -rf "$box/counts.$f"; mv "$pen/counts" "$box/counts.$f"
       printf 'ok %s clean\n' "$f" > "$out"
     else
-      printf 'FAILED %s clean run exited %s\n' "$f" "$rc" > "$out"
+      printf 'FAILED %s clean run exited %s with %s FAIL lines\n' \
+        "$f" "$rc" "${nfail:-0}" > "$out"
     fi
   elif [ -f "$pen/fired" ]; then
     printf 'ok %s %s #%s\n' "$f" "$key" "$nth" > "$out"
@@ -409,13 +436,35 @@ assert_eq "$reached" "$nclean" "and all $nclean of them finished"
 
 # The jobs, from what the clean runs counted.
 jobs="$box/jobs"; : > "$jobs"
-depth="${PREEN_HARNESS_DEPTH:-first}"
+#
+# Which uses of a key are failed. A key made only of lib.sh's helpers —
+# `preen-test+new_repo` — runs the same body at every call, and what differs is
+# the caller, which part 1 holds for the two that hand back a path. So those are
+# failed at their first use. Any other key — a call at a test's top level, or
+# one with a test's own function anywhere in the chain — is failed at EVERY use:
+# a test's helper is called from lines no rule reads, and the second call that
+# skips `|| exit 1` was green while the first, guarded one passed for it.
+lib_fns=" $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*\(\)' "$PREEN_ROOT/tests/lib.sh" \
+            | tr -d '()' | tr '\n' ' ') "
+lib_only() {
+  # lib_only <key> -> 0 if every function in the key is one of lib.sh's
+  local rest="$1" fn
+  case "$rest" in *+*) rest="${rest#*+}" ;; *) return 1 ;; esac
+  while [ -n "$rest" ]; do
+    fn="${rest%%+*}"
+    case "$lib_fns" in *" $fn "*) ;; *) return 1 ;; esac
+    case "$rest" in *+*) rest="${rest#*+}" ;; *) rest="" ;; esac
+  done
+  return 0
+}
+depth="${PREEN_HARNESS_DEPTH:-default}"
+calls=0
 for b in $(swept_files); do
   [ -d "$box/counts.$b" ] || continue
   for c in "$box/counts.$b"/*; do
     [ -f "$c" ] || continue
-    key="${c##*/}"; u="$(cat "$c")"
-    if [ "$depth" = full ]; then
+    key="${c##*/}"; u="$(cat "$c")"; calls=$((calls + u))
+    if [ "$depth" = full ] || ! lib_only "$key"; then
       k=1; while [ "$k" -le "$u" ]; do
         printf '%s %s %s\n' "$b" "$key" "$k" >> "$jobs"; k=$((k + 1))
       done
@@ -436,11 +485,11 @@ cut -d' ' -f1,2 "$jobs" | LC_ALL=C sort -u > "$box/swept"
 drift="$( LC_ALL=C comm -23 "$box/pinned" "$box/swept" | sed 's/^/  pinned, not swept: /'
           LC_ALL=C comm -13 "$box/pinned" "$box/swept" | sed 's/^/  swept, not pinned: /' )"
 npinned="$(grep -c . "$box/pinned" || true)"
-assert_eq "$drift" "" "the sweep is exactly the $npinned jobs pinned in tests/sweep-sites"
+assert_eq "$drift" "" "the sweep covers exactly the $npinned keys pinned in tests/sweep-sites"
 
 sweep "$jobs"
-printf '  NOTE: %s clean runs, then %s jobs at depth %s, %s of them fired\n' \
-  "$nclean" "$njobs" "$depth" "$reached"
+printf '  NOTE: %s clean runs made %s helper calls; %s jobs at depth %s, %s of them fired\n' \
+  "$nclean" "$calls" "$njobs" "$depth" "$reached"
 assert_eq "$done_n" "$njobs" "every job in the sweep reported back"
 assert_eq "$bad" "" \
   "every one of the $njobs mktemp failure points fires, and none damages the checkout it runs from"

@@ -83,6 +83,12 @@ assert_nonempty() {
 # take the NAME of a variable and set it, rather than printing: a function whose
 # output is captured with $(...) runs in a subshell, where `exit` ends only the
 # subshell and the caller carries on with the empty string that started this.
+#
+# The FAIL line goes to stdout so run.sh counts it. Inside a `$(helper)` capture
+# that also means the caller's variable holds the FAIL text rather than an empty
+# string, so `git -C "$x"` fails instead of acting on the checkout. That is
+# luck, not a guard: a helper that sends its own output to /dev/null hands back
+# an empty string, and only `|| exit 1` and the sweep stand behind it.
 _preen_tmpfail() {
   printf '  FAIL: no temporary %s under TMPDIR=%s\n' "$1" "${TMPDIR:-/tmp}"
   printf 'RUNNER: refusing to continue — an empty path here reaches rm -rf, cd and git -C\n' >&2
@@ -97,14 +103,19 @@ _preen_tmpfail() {
 # `preen-test+quiet_repo+setup`. The stand-in mktemp keys on that, and a call
 # that arrives WITHOUT it did not come through these helpers, which the sweep
 # reports as a raw mktemp. Outside the sweep nothing reads it.
+#
+# FUNCNAME is [0] this, [1] mktmpd or mktmpf, then the callers, then bash's own
+# frames: `main` last, with `source` before it while lib.sh is being sourced.
+# Only those trailing frames are dropped, by position. Dropping them by NAME let
+# a test's own function called `main` share the bare top-level key, so its
+# calls were never failed on their own.
 _preen_tmp_via() {
-  local _f
+  local _i=2 _n=${#FUNCNAME[@]}
   _preen_via="$1"
-  for _f in "${FUNCNAME[@]}"; do
-    case "$_f" in
-      _preen_tmp_via|mktmpd|mktmpf|main|source) ;;
-      *) _preen_via="$_preen_via+$_f" ;;
-    esac
+  [ "${FUNCNAME[_n-1]}" = main ] && _n=$((_n - 1))
+  [ "$_n" -gt 2 ] && [ "${FUNCNAME[_n-1]}" = source ] && _n=$((_n - 1))
+  while [ "$_i" -lt "$_n" ]; do
+    _preen_via="$_preen_via+${FUNCNAME[_i]}"; _i=$((_i + 1))
   done
 }
 
