@@ -41,14 +41,36 @@ if ! "$PREEN" --watch-check; then
   assert_contains "$out" 'watch needs fzf 0.73 or newer' 'installed old fzf explains required capability'
   exit 0
 fi
-export WATCH_TEST="$t/live" WATCH_FZF="$(command -v fzf)"
+export WATCH_TEST="$t/live" WATCH_FZF="$(command -v fzf)" WATCH_DATE="$(command -v date)"
 cat > "$t/live/fzf" <<'SH'
 #!/bin/sh
 printf '%s' "$PREEN_STATE" > "$WATCH_TEST/state"
 printf '%s\n' "$$" > "$WATCH_TEST/fzf-pid"
+export WATCH_PREEN="$PREEN_SELF" PREEN_SELF="$WATCH_TEST/callback"
 exec "$WATCH_FZF" "$@" \
-  --bind 'ctrl-t:execute-silent(cat "$PREEN_STATE/paths"/{1} > "$WATCH_TEST/selection"; printf "%s\000" {q} > "$WATCH_TEST/query")' \
+  --bind 'ctrl-t:execute-silent(printf "%s\000" {q} > "$WATCH_TEST/query"; cat "$PREEN_STATE/paths"/{1} > "$WATCH_TEST/selection")' \
+  --bind 'ctrl-o:execute-silent(printf "%s:%s" "$FZF_TOTAL_COUNT" "$FZF_MATCH_COUNT" > "$WATCH_TEST/stats")' \
   --bind 'load:+execute-silent(printf . >> "$WATCH_TEST/loads")'
 SH
-chmod +x "$t/live/fzf"
+cat > "$t/live/callback" <<'SH'
+#!/bin/sh
+case "${1:-}:${2:-}" in
+  --review-file:viewed)
+    "$WATCH_PREEN" "$@" || exit $?
+    if [ -f "$WATCH_TEST/hold-viewed" ]; then
+      : > "$WATCH_TEST/viewed-held"
+      while [ ! -f "$WATCH_TEST/release-viewed" ]; do sleep 0.02; done
+    fi ;;
+  *) exec "$WATCH_PREEN" "$@" ;;
+esac
+SH
+cat > "$t/live/date" <<'SH'
+#!/bin/sh
+if [ -f "$WATCH_TEST/hold-poll" ]; then
+  : > "$WATCH_TEST/poll-held"
+  while [ ! -f "$WATCH_TEST/release-poll" ]; do sleep 0.02; done
+fi
+exec "$WATCH_DATE" "$@"
+SH
+chmod +x "$t/live/fzf" "$t/live/callback" "$t/live/date"
 PATH="$t/live:$PATH" python3 "$(dirname "$0")/watch-pty.py" "$d" "$t/live"

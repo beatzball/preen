@@ -1,4 +1,6 @@
 """PTY integration exercised only by test-watch.sh; no runtime dependency."""
+import json
+import shutil
 import fcntl
 import os
 from pathlib import Path
@@ -26,6 +28,26 @@ def check(ok, label):
     global failures
     print("  " + ("PASS: " if ok else "FAIL: ") + label, flush=True)
     failures += not ok
+    if not ok:
+        observation = {"assertion": label, "loads": loads(), "captures_hex": {},
+                       "waiter_rows": waiter_rows(), "status": p.poll() if p else None}
+        for name in ("selection", "query", "stats"):
+            try:
+                observation["captures_hex"][name] = (out / name).read_bytes().hex()
+            except FileNotFoundError:
+                observation["captures_hex"][name] = None
+        destination = os.environ.get("PREEN_TEST_DIAGNOSTICS")
+        if destination:
+            evidence = Path(destination) / (str(os.getpid()) + "-" + str(failures))
+            evidence.mkdir(parents=True, exist_ok=True)
+            (evidence / "terminal.bin").write_bytes(output)
+            for name in ("selection", "query", "stats", "loads", "state", "fzf-pid"):
+                if (out / name).is_file():
+                    shutil.copy(out / name, evidence / name)
+            if state and state.is_dir():
+                shutil.copytree(state, evidence / "picker-state")
+            observation["evidence"] = str(evidence)
+        print("WATCH_DIAGNOSTIC: " + json.dumps(observation), flush=True)
 
 
 def pump(delay=0.05):
@@ -64,6 +86,32 @@ def names():
         return (state / "files").read_bytes().split(b"\0")
     except FileNotFoundError:
         return []
+
+
+def waiter_rows():
+    if not (out / "fzf-pid").exists():
+        return []
+    finder = int((out / "fzf-pid").read_text())
+    rows = subprocess.check_output(["ps", "-axo", "pid=,ppid=,command="]).decode().splitlines()
+    return [row for row in rows if len(row.split(None, 2)) == 3
+            and int(row.split(None, 2)[1]) == finder
+            and "--watch-await" in row.split(None, 2)[2]]
+
+
+def query_is(expected):
+    return until(lambda: (out / "query").exists()
+                 and (out / "query").read_bytes() == os.fsencode(expected) + b"\0", 2)
+
+
+def picker_stats():
+    (out / "stats").unlink(missing_ok=True)
+    os.write(master, b"\x0f")
+    if not until(lambda: (out / "stats").exists() and b":" in (out / "stats").read_bytes(), 1):
+        return None
+    try:
+        return tuple(map(int, (out / "stats").read_bytes().split(b":")))
+    except ValueError:
+        return None
 
 
 def selected(expected):
@@ -122,7 +170,7 @@ def finish(key, label):
     check(not state.exists(), label + " removes temporary picker state")
     os.close(master)
     pollers.clear()
-    for name in ("state", "loads", "selection", "query"):
+    for name in ("state", "loads", "selection", "query", "stats"):
         (out / name).unlink(missing_ok=True)
 
 
@@ -194,12 +242,7 @@ try:
         os.write(master, b"\x16")
         check(until(lambda: loads() > before and count() == expected), "viewed toggle reloads with count " + expected)
         check(selected(second), "viewed toggle preserves selected US path")
-    rows = subprocess.check_output(["ps", "-axo", "pid=,ppid=,command="]).decode().splitlines()
-    finder = int((out / "fzf-pid").read_text())
-    waiters = [row for row in rows if len(row.split(None, 2)) == 3
-               and int(row.split(None, 2)[1]) == finder
-               and "--watch-await" in row.split(None, 2)[2]]
-    check(len(waiters) == 1, "viewed reloads keep exactly one active polling callback")
+    check(until(lambda: len(waiter_rows()) == 1), "viewed reloads keep exactly one active polling callback")
     before = loads()
     (repo / second).write_text("watched US content changed\n")
     check(until(lambda: loads() > before and count() == "0 of 3 viewed"), "watch clears viewed mark immediately on content edit")
@@ -209,11 +252,11 @@ try:
     check(until(lambda: loads() > before and count() == "0 of 3 viewed"), "returning old watched content does not restore viewed mark")
     os.write(master, b"second")
     check(selected(second), "query filters the safe-ID display by raw path")
-    check((out / "query").read_bytes() == b"second\0", "picker retains actual query text")
+    check(query_is("second"), "picker retains actual query text")
     before = loads()
     os.write(master, b"\x16")
     check(until(lambda: loads() > before and count() == "1 of 3 viewed"), "viewed toggle updates count under a query")
-    check(selected(second) and (out / "query").read_bytes() == b"second\0", "viewed reload preserves path and query together")
+    check(selected(second) and query_is("second"), "viewed reload preserves path and query together")
     header = subprocess.check_output(["/bin/bash", preen, "--watch-header"],
                                      env=dict(os.environ, PREEN_STATE=str(state))).decode()
     check(header.count("watch · last changed") == 1 and "1 of 3 viewed" in header,
@@ -225,6 +268,26 @@ try:
         (repo / name).unlink()
     check(until(lambda: loads() > before and not any(names()) and count() == "0 of 0 viewed"), "watch empties the list and viewed count without exiting")
     finish(b"\x1b", "Escape after viewed and membership churn")
+    # Hold a user reload after it produced the old list. Poll publication must
+    # already be stopped; otherwise load:bg-cancel can lose a published reload.
+    (repo / "race-a.txt").write_text("old list member\n")
+    spawn(["watch"])
+    (out / "hold-viewed").touch()
+    (out / "hold-poll").touch()
+    before = loads()
+    os.write(master, b"\x16")
+    check(until(lambda: (out / "viewed-held").exists()), "timing barrier holds viewed producer before EOF")
+    check(until(lambda: not waiter_rows()), "watch cancels polling before viewed list production")
+    (repo / "race-b.txt").write_text("must arrive without another edit\n")
+    check(until(lambda: (out / "poll-held").exists() or not waiter_rows()), "controlled reload interleaving is ready")
+    (out / "release-viewed").touch()
+    check(until(lambda: loads() > before), "held user reload finishes")
+    (out / "hold-poll").unlink()
+    (out / "release-poll").touch()
+    os.write(master, b"^race-b.txt$")
+    check(until(lambda: picker_stats() == (2, 1)), "new file reaches actual picker after overlapping viewed reload without another edit")
+    check(selected("race-b.txt") and query_is("^race-b.txt$"), "recovered reload preserves exact query and new path")
+    finish(b"\x1b", "Escape after controlled reload interleaving")
 except Exception as exc:
     check(False, "PTY integration: " + str(exc))
 finally:

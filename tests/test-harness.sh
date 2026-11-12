@@ -420,6 +420,12 @@ run_job() {
     else
       printf 'FAILED %s clean run exited %s with %s FAIL lines\n' \
         "$f" "$rc" "${nfail:-0}" > "$out"
+      # Preserve the primary assertion before removing the scratch job.
+      sed 's/^/    clean-log: /' "$pen/log" >> "$out"
+      if [ -n "${PREEN_TEST_DIAGNOSTICS:-}" ]; then
+        mkdir -p "$PREEN_TEST_DIAGNOSTICS"
+        cp "$pen/log" "$PREEN_TEST_DIAGNOSTICS/$f.clean.log"
+      fi
     fi
   elif [ -f "$pen/fired" ]; then
     printf 'ok %s %s #%s\n' "$f" "$key" "$nth" > "$out"
