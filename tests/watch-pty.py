@@ -215,9 +215,12 @@ try:
     (repo / " a-first.txt").unlink()
     spawn(["watch"])
     check(not any(names()), "watch starts on a clean repository")
+    os.write(master, b"\x16")
+    check(picker_stats() == (0, 0), "viewed key on an empty picker leaves it empty")
+    check(until(lambda: len(waiter_rows()) == 1), "viewed key without a selection keeps polling")
     before = loads()
     (repo / "first.txt").write_text("first change\n")
-    check(until(lambda: loads() > before and b"first.txt" in names()), "first change enters initially empty picker")
+    check(until(lambda: loads() > before and picker_stats() == (1, 1)), "first change enters actual picker after empty viewed key")
     finish(b"\x03", "Ctrl-C")
     # Both raw paths share the old delimiter prefix. Their safe IDs must stay
     # distinct through membership changes, viewed badges and query filtering.
