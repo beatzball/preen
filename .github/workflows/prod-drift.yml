@@ -55,6 +55,11 @@ jobs:
           # Through `env:`, not `${{ }}` in the body -- see PROD_BASE_URL in
           # ci.yml's verify-prod for why.
           PROD_BASE_URL: ${{ vars.PROD_BASE_URL }}
+          # Re-read main from origin AFTER reading production. The checkout is
+          # main as it was when this run was queued; a newer main can deploy
+          # before the run starts, and must not read as drift. This also makes
+          # a manual run from another branch compare against main.
+          PREEN_DRIFT_REMOTE: origin
         run: |
           if [ -z "$PROD_BASE_URL" ]; then
             echo "::error::PROD_BASE_URL is not set, so production cannot be checked."

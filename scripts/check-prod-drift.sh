@@ -29,10 +29,24 @@
 #
 # A deploy takes time: CI on main, then a Coolify build. So a site/ change
 # younger than the grace period is reported as pending, not as drift. The age
-# is taken from the OLDEST undeployed site/ commit, so a fresh site change on
-# top of an old missed one cannot hide the old one.
+# is taken from the OLDEST site/ commit that is still outstanding, so a fresh
+# site change on top of an old missed one cannot hide the old one. "Still
+# outstanding" matters: a site change that a later commit reverted, so that
+# main's site/ matched production again, is not counted -- otherwise its age
+# would be charged to the next, healthy deploy.
+#
+# The age is the commit's committer date, not when it reached main. With
+# squash-only merges (this repository's setting) the two are the same moment.
+# A merge commit or a direct push of an old commit would make a change look
+# older than it is -- a false alarm, never a missed one -- and a commit dated
+# in the future would look younger.
 #
 # Env:
+#   PREEN_DRIFT_REMOTE      if set (CI sets "origin"), fetch that remote's main
+#                           AFTER reading production, and compare against it
+#                           rather than HEAD. A scheduled run can wait in a
+#                           queue while main moves on and deploys, so the
+#                           checkout alone can be older than production.
 #   PREEN_DRIFT_GRACE_MIN   minutes a site/ change may wait to deploy (default 120)
 #   PREEN_PROBE_RETRIES     attempts at reading /version.json (default 3)
 #   PREEN_PROBE_DELAY       seconds between attempts (default 10)
@@ -46,9 +60,9 @@ retries="${PREEN_PROBE_RETRIES:-3}"
 delay="${PREEN_PROBE_DELAY:-10}"
 now="${PREEN_NOW:-$(date +%s)}"
 
-err() { printf '::error::%s\n' "$*"; exit 1; }
+remote="${PREEN_DRIFT_REMOTE:-}"
 
-head_sha=$(git rev-parse --verify 'HEAD^{commit}')
+err() { printf '::error::%s\n' "$*"; exit 1; }
 
 # 1. What production serves. Retried, because one dropped request is not a
 # missing deploy, and a false alarm every few weeks teaches people to ignore
@@ -68,6 +82,17 @@ while :; do
     err "$BASE/version.json gave no commit after $n attempts. Production is down, or is serving an image built without GIT_SHA."
   sleep "$delay"
 done
+
+# Main is read AFTER production, never before. Read first, a deploy of a newer
+# main that lands between the two reads would be a commit this checkout has
+# never seen, and step 2 would call a successful deploy a missing one.
+if [ -n "$remote" ]; then
+  git fetch --quiet "$remote" "+refs/heads/main:refs/remotes/$remote/main" ||
+    err "could not fetch main from $remote, so production cannot be compared with it."
+  head_sha=$(git rev-parse --verify "refs/remotes/$remote/main^{commit}")
+else
+  head_sha=$(git rev-parse --verify 'HEAD^{commit}')
+fi
 echo "production serves $served"
 echo "main is at         $head_sha"
 
@@ -88,14 +113,20 @@ fi
 
 # 4. It does not. Pending, or missing?
 #
-# --reverse with sed rather than `head -1`: under `set -o pipefail` a
-# `git log | head -1` can die of SIGPIPE when head exits first, and that would
-# fail this step for a reason that has nothing to do with drift.
-oldest=$(git log --reverse --format='%H %ct' "$served..$head_sha" -- site/ | sed -n 1p)
-[ -n "$oldest" ] ||
+# Walk the site/ commits since the served one, oldest first. Each one that
+# leaves site/ equal to production's again (a revert) clears the clock; the
+# first one after that which does not is where the outstanding change starts.
+oldest_sha=""
+for c in $(git log --reverse --format=%H "$served..$head_sha" -- site/); do
+  if git diff --quiet "$served" "$c" -- site/; then
+    oldest_sha=""
+  elif [ -z "$oldest_sha" ]; then
+    oldest_sha=$c
+  fi
+done
+[ -n "$oldest_sha" ] ||
   err "site/ differs between $served and $head_sha, but no commit between them touches site/. Read the history by hand."
-oldest_sha=${oldest% *}
-oldest_ct=${oldest#* }
+oldest_ct=$(git log -1 --format=%ct "$oldest_sha")
 age_min=$(( (now - oldest_ct) / 60 ))
 
 echo "site/ changes on main that production does not have:"
