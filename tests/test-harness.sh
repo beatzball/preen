@@ -218,31 +218,41 @@ real_mktemp="$(command -v mktemp)"
 # part 1 still reads the heredoc that wrote it. And a call that sets
 # PREEN_MKTEMP_VIA itself is taken at its word. That is not a slip anyone makes
 # by accident; it is a line a reviewer reads.
+#
+# owner_of decides by the nearest ancestor that is git, or a shell running a
+# script FILE. A test file runs as `bash test-NAME.sh`; preen runs under several
+# names and paths (test-version.sh copies it, links it, and puts a space in its
+# directory), so any script that is not a test file is "script". Inline code —
+# `bash -c`, and `-uc` or `-o pipefail -c`, which read the same — is not a file,
+# so the search goes on to whoever ran it. A process ps cannot read is reported
+# as unknown, with the pid: tracing needs ps, and a sandbox that refuses it
+# makes every unkeyed call look raw rather than letting them all through.
+#
+# The comments stay out here because the heredoc below is unquoted, so it can
+# put in $real_mktemp: a backtick inside it is a command, even in a comment.
 cat > "$shim/mktemp" <<EOF
 #!/bin/sh
 owner_of() {
-  # owner_of <pid> -> git, script, a test file's name, or unknown
-  #
-  # The nearest ancestor that is git, or a shell running a script FILE, decides.
-  # A test file is run as `bash test-NAME.sh`; preen is run under several names
-  # and paths (test-version.sh copies it, links it, and puts a space in its
-  # directory), so anything that is not a test file is "script". `bash -c` is
-  # inline code, not a file, so the search goes on to whoever ran it.
   pid=\$1; i=0
   set -f
   while [ "\$i" -lt 12 ] && [ "\${pid:-0}" -gt 1 ]; do
-    line="\$(ps -ww -o ppid= -o args= -p "\$pid" 2>/dev/null)" || break
-    [ -n "\$line" ] || break
+    line="\$(ps -ww -o ppid= -o args= -p "\$pid" 2>/dev/null)" || line=""
+    if [ -z "\$line" ]; then
+      echo "unknown (ps could not read pid \$pid)"; return
+    fi
     set -- \$line
     pid=\$1; shift
     case "\${1##*/}" in
       git) echo git; return ;;
       bash|sh|dash|ksh|zsh)
-        shift; inline=""; script=""
+        shift; inline=""; script=""; skip=""
         for w in "\$@"; do
+          if [ -n "\$skip" ]; then skip=""; continue; fi
           case "\$w" in
-            -c) inline=1; break ;;
-            -*) ;;
+            -o|+o|-O|+O|--rcfile|--init-file) skip=1 ;;
+            --*) ;;
+            -*c*) inline=1; break ;;
+            -*|+*) ;;
             *) script="\$w"; break ;;
           esac
         done
