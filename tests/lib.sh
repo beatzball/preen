@@ -105,17 +105,22 @@ _preen_tmpfail() {
 # reports as a raw mktemp. Outside the sweep nothing reads it.
 #
 # FUNCNAME is [0] this, [1] mktmpd or mktmpf, then the callers, and in a script
-# file bash's own `main` frame last. Only that frame is dropped, and it is told
-# apart by its line, not its name: bash's own frame was "called" from line 0,
-# while a test's function named `main` was called from a real line — including
-# under `bash -c`, where there is no frame of bash's own and a user `main` is
-# last. Dropping by NAME let such a function share the bare top-level key, so
-# its calls were never failed on their own. A `source` frame stays for the same
-# reason, so a call made while lib.sh is being sourced reads `preen-dep+source`.
+# file bash's own `main` frame last. Only that frame is dropped, and never by
+# its name alone: dropping by NAME let a test's own function called `main` share
+# the bare top-level key, so its calls were never failed on their own.
+#
+# bash's own frame exists only when bash runs a script FILE, and it is "called"
+# from line 0. Under `bash -c` there is no such frame, so a last `main` is the
+# test's — and bash 3.2 also reports line 0 for it on a one-line command string,
+# so the line alone is not proof. BASH_EXECUTION_STRING is set exactly under
+# `bash -c`, which settles it. Under `bash -s` a user `main` has a real line.
+# Checked on bash 3.2.57 and 5.2.21. A `source` frame always stays, so a call
+# made while lib.sh is being sourced reads `preen-dep+source`.
 _preen_tmp_via() {
   local _i=2 _n=${#FUNCNAME[@]}
   _preen_via="$1"
-  if [ "${FUNCNAME[_n-1]}" = main ] && [ "${BASH_LINENO[_n-1]}" = 0 ]; then
+  if [ "${FUNCNAME[_n-1]}" = main ] && [ "${BASH_LINENO[_n-1]}" = 0 ] \
+     && [ -z "${BASH_EXECUTION_STRING+set}" ]; then
     _n=$((_n - 1))
   fi
   while [ "$_i" -lt "$_n" ]; do

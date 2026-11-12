@@ -126,8 +126,10 @@ shadows=""
 for t in "$PREEN_ROOT"/tests/test-*.sh; do
   # Both forms bash takes: `name()`, and `function name` with or without the
   # parentheses, its brace on the same line or the next.
-  for fn in $(grep -oE '^[[:space:]]*(function[[:space:]]+[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\))' "$t" \
-                | sed -E 's/^[[:space:]]*(function[[:space:]]+)?//; s/[[:space:]]*\(\)$//'); do
+  # The name has to end where a declaration ends, or `function new_repo-helper`
+  # would read as new_repo.
+  for fn in $(grep -oE '^[[:space:]]*(function[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]]|\(|\{|$)|[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\))' "$t" \
+                | sed -E 's/^[[:space:]]*(function[[:space:]]+)?//; s/[[:space:]({]*\)?$//; s/[[:space:]]*\(\)$//'); do
     case "$lib_fns" in *" $fn "*) shadows="$shadows ${t##*/}:$fn" ;; esac
   done
 done

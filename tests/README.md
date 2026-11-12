@@ -214,7 +214,7 @@ Then, by default:
 That is 130 jobs today, out of 138 helper calls in a clean pass. A test's own
 function named `main` or `source` is a frame like any other: only bash's own
 `main` frame is dropped from a key, and it is told apart by being called from
-line 0, not by its name. A call made while `lib.sh` is being sourced reads
+line 0 outside `bash -c`, not by its name. A call made while `lib.sh` is being sourced reads
 `preen-dep+source`. `PREEN_HARNESS_DEPTH=full`
 fails every use of every key, `lib.sh`'s helpers included, at one job per call.
 
