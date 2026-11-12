@@ -101,14 +101,34 @@ for h in mktmpd mktmpf tmp_refused_for resolve_dir; do
   assert_eq "$n" "1" "lib.sh defines $h exactly once"
 done
 
+# The helpers whose every capture must carry `|| exit 1`. Part 3 leans on this
+# list too: a key made only of these is failed at its first use, because the
+# rule below holds every other caller. One list, so the two cannot drift apart.
+guarded="new_repo preen_state"
+guarded_re="$(printf '%s' "$guarded" | tr ' ' '|')"
+
 # Backticks as well as `$(...)`: `x=\`new_repo\`` is a capture too, and it walked
 # past a pattern that named only the `$(` form. The trailing comment is cut before
 # the `|| exit` test, because `grep -v` on the whole line also accepts
 # `x="$(new_repo)"   # || exit 1`, where the guard is only being talked about.
-ungated="$(rule_hits '\$\( *(new_repo|preen_state)|`(new_repo|preen_state)' \
+ungated="$(rule_hits "\\\$\\( *($guarded_re)|\`($guarded_re)" \
            | sed 's/[[:space:]]*#.*$//' | grep -v '|| exit' || true)"
 assert_eq "$ungated" "" \
   "every new_repo and preen_state capture carries || exit 1 — they run in a subshell and cannot exit for you"
+
+# And a name means the same function everywhere. A test that defines its own
+# `preview` or `new_repo` runs under lib.sh's name, so a rule or a key that
+# trusts the name would be trusting the wrong body.
+lib_fns=" $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*\(\)' "$PREEN_ROOT/tests/lib.sh" \
+            | tr -d '()' | tr '\n' ' ') "
+shadows=""
+for t in "$PREEN_ROOT"/tests/test-*.sh; do
+  for fn in $(grep -oE '^[[:space:]]*(function[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\)' "$t" \
+                | sed -E 's/^[[:space:]]*(function[[:space:]]+)?//; s/[[:space:]]*\(\)$//'); do
+    case "$lib_fns" in *" $fn "*) shadows="$shadows ${t##*/}:$fn" ;; esac
+  done
+done
+assert_eq "$shadows" "" "no test file redefines a function lib.sh defines"
 
 # `&& pwd`, not one quoting style: `cd "${x}" && pwd -P` is the same line with
 # braces, and it was invisible to the pattern that named `$x` exactly. lib.sh's
@@ -191,9 +211,10 @@ assert_eq "$?" "1" "and exits rather than writing its state to the filesystem ro
 # moves with the environment — a git hook that calls mktemp shifts every number
 # after it — while the keys are names the source spells out.
 #
-# WHAT THIS COVERS, exactly. By default, a key made only of lib.sh's helpers is
-# failed at its FIRST use in each file, and every other key at EVERY use — see
-# lib_only below for why. tests/sweep-sites lists the keys, one file and key per
+# WHAT THIS COVERS, exactly. By default, a key made only of new_repo and
+# preen_state is failed at its FIRST use in each file, and every other key at
+# EVERY use — see
+# first_use_ok below for why. tests/sweep-sites lists the keys, one file and key per
 # line, and the sweep must produce exactly that set: a key that stops existing
 # fails the run instead of passing quietly. PREEN_HARNESS_DEPTH=full fails every
 # use of every key, lib.sh's helpers included, to the last call.
@@ -249,9 +270,10 @@ owner_of() {
         for w in "\$@"; do
           if [ -n "\$skip" ]; then skip=""; continue; fi
           case "\$w" in
-            -o|+o|-O|+O|--rcfile|--init-file) skip=1 ;;
+            --rcfile|--init-file) skip=1 ;;
             --*) ;;
             -*c*) inline=1; break ;;
+            -*o*|+*o*|-*O*|+*O*) skip=1 ;;
             -*|+*) ;;
             *) script="\$w"; break ;;
           esac
@@ -447,22 +469,20 @@ assert_eq "$reached" "$nclean" "and all $nclean of them finished"
 # The jobs, from what the clean runs counted.
 jobs="$box/jobs"; : > "$jobs"
 #
-# Which uses of a key are failed. A key made only of lib.sh's helpers —
+# Which uses of a key are failed. A key made only of the $guarded helpers —
 # `preen-test+new_repo` — runs the same body at every call, and what differs is
-# the caller, which part 1 holds for the two that hand back a path. So those are
-# failed at their first use. Any other key — a call at a test's top level, or
-# one with a test's own function anywhere in the chain — is failed at EVERY use:
-# a test's helper is called from lines no rule reads, and the second call that
-# skips `|| exit 1` was green while the first, guarded one passed for it.
-lib_fns=" $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*\(\)' "$PREEN_ROOT/tests/lib.sh" \
-            | tr -d '()' | tr '\n' ' ') "
-lib_only() {
-  # lib_only <key> -> 0 if every function in the key is one of lib.sh's
+# the caller, which part 1 holds: every capture carries `|| exit 1`, and no test
+# may redefine the name. So those are failed at their first use. Every other key
+# is failed at EVERY use: a test's own helper, any other lib.sh helper, a call at
+# a test's top level. Their callers are lines no rule reads, and a second call
+# that skips `|| exit 1` was green while the first, guarded one passed for it.
+first_use_ok() {
+  # first_use_ok <key> -> 0 if every function in the key is in $guarded
   local rest="$1" fn
   case "$rest" in *+*) rest="${rest#*+}" ;; *) return 1 ;; esac
   while [ -n "$rest" ]; do
     fn="${rest%%+*}"
-    case "$lib_fns" in *" $fn "*) ;; *) return 1 ;; esac
+    case " $guarded " in *" $fn "*) ;; *) return 1 ;; esac
     case "$rest" in *+*) rest="${rest#*+}" ;; *) rest="" ;; esac
   done
   return 0
@@ -474,7 +494,7 @@ for b in $(swept_files); do
   for c in "$box/counts.$b"/*; do
     [ -f "$c" ] || continue
     key="${c##*/}"; u="$(cat "$c")"; calls=$((calls + u))
-    if [ "$depth" = full ] || ! lib_only "$key"; then
+    if [ "$depth" = full ] || ! first_use_ok "$key"; then
       k=1; while [ "$k" -le "$u" ]; do
         printf '%s %s %s\n' "$b" "$key" "$k" >> "$jobs"; k=$((k + 1))
       done
