@@ -107,11 +107,15 @@ Diffs start **side-by-side**. Press `ctrl-s` to flip to inline, and `ctrl-s`
 again to flip back. The preview repaints immediately; the toggle is live, so
 you can switch mid-review on a file that is too wide for two columns.
 
-To start in inline instead:
+To start in inline instead, for this repository or for every one:
 
 ```sh
-PREEN_LAYOUT=inline preen diff
+git config preen.layout inline
+git config --global preen.layout inline
 ```
+
+Or for one run only: `PREEN_LAYOUT=inline preen diff`. See
+[Theming](/docs/theming#starting-in-inline) for which one wins.
 
 The toggle works in `diff`, `pr` and `worktrees` modes. Markdown has one
 layout, so `ctrl-s` does nothing in `md` mode.
