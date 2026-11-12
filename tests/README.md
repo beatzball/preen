@@ -211,8 +211,9 @@ Then, by default:
   unguarded one later in the file.
 
 That is 130 jobs today, out of 138 helper calls in a clean pass. A test's own
-function named `main` is a frame like any other: only bash's own trailing
-`main` and `source` frames are dropped from a key. `PREEN_HARNESS_DEPTH=full`
+function named `main` or `source` is a frame like any other: only bash's own
+last `main` frame is dropped from a key, so a call made while `lib.sh` is being
+sourced reads `preen-dep+source`. `PREEN_HARNESS_DEPTH=full`
 fails every use of every key, `lib.sh`'s helpers included, at one job per call.
 
 `tests/sweep-sites` pins the set of keys, one line per file and key. The sweep

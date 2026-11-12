@@ -105,15 +105,15 @@ _preen_tmpfail() {
 # reports as a raw mktemp. Outside the sweep nothing reads it.
 #
 # FUNCNAME is [0] this, [1] mktmpd or mktmpf, then the callers, then bash's own
-# frames: `main` last, with `source` before it while lib.sh is being sourced.
-# Only those trailing frames are dropped, by position. Dropping them by NAME let
-# a test's own function called `main` share the bare top-level key, so its
-# calls were never failed on their own.
+# `main` frame last. Only that last frame is dropped, by position. Dropping
+# frames by NAME let a test's own function called `main` share the bare
+# top-level key, so its calls were never failed on their own. A `source` frame
+# is kept for the same reason — a test may name a function `source` too — so a
+# call made while lib.sh is being sourced reads `preen-dep+source`.
 _preen_tmp_via() {
   local _i=2 _n=${#FUNCNAME[@]}
   _preen_via="$1"
   [ "${FUNCNAME[_n-1]}" = main ] && _n=$((_n - 1))
-  [ "$_n" -gt 2 ] && [ "${FUNCNAME[_n-1]}" = source ] && _n=$((_n - 1))
   while [ "$_i" -lt "$_n" ]; do
     _preen_via="$_preen_via+${FUNCNAME[_i]}"; _i=$((_i + 1))
   done

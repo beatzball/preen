@@ -244,8 +244,9 @@ real_mktemp="$(command -v mktemp)"
 # script FILE. A test file runs as `bash test-NAME.sh`; preen runs under several
 # names and paths (test-version.sh copies it, links it, and puts a space in its
 # directory), so any script that is not a test file is "script". Inline code —
-# `bash -c`, and `-uc` or `-o pipefail -c`, which read the same — is not a file,
-# so the search goes on to whoever ran it. A process ps cannot read is reported
+# `bash -c`, `-uc`, `-euo pipefail -c`, and `bash -s ARG`, which reads its code
+# from stdin and takes ARG as an argument — is not a file, so the search goes
+# on to whoever ran it. A process ps cannot read is reported
 # as unknown, with the pid: tracing needs ps, and a sandbox that refuses it
 # makes every unkeyed call look raw rather than letting them all through.
 #
@@ -272,7 +273,7 @@ owner_of() {
           case "\$w" in
             --rcfile|--init-file) skip=1 ;;
             --*) ;;
-            -*c*) inline=1; break ;;
+            -*c*|-*s*) inline=1; break ;;
             -*o*|+*o*|-*O*|+*O*) skip=1 ;;
             -*|+*) ;;
             *) script="\$w"; break ;;
@@ -323,11 +324,25 @@ chmod +x "$shim/mktemp"
 # swept before its first commit. Outside a git checkout, everything but .git.
 tmpl="$box/template"
 mkdir -p "$tmpl"
+#
+# A file git tracks but you deleted and did not stage is left out rather than
+# handed to tar, which would complain about it. Any other failure in the copy
+# stops the run: a template missing files is the degraded run this replaced.
 if git -C "$PREEN_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
-  ( cd "$PREEN_ROOT" && git ls-files -z --cached --others --exclude-standard \
-      | tar --null -T - -cf - ) | tar -x -C "$tmpl"
+  ( set -o pipefail
+    cd "$PREEN_ROOT" || exit 1
+    git ls-files -z --cached --others --exclude-standard \
+      | while IFS= read -r -d '' p; do
+          if [ -e "$p" ] || [ -L "$p" ]; then printf '%s\0' "$p"; fi
+        done \
+      | tar --null -T - -cf - | tar -x -C "$tmpl" )
 else
-  ( cd "$PREEN_ROOT" && tar -cf - --exclude ./.git . ) | tar -x -C "$tmpl"
+  ( set -o pipefail
+    cd "$PREEN_ROOT" && tar -cf - --exclude ./.git . | tar -x -C "$tmpl" )
+fi
+if [ "$?" -ne 0 ]; then
+  printf '  FAIL: could not copy the checkout into a template under %s\n' "$box"
+  exit 1
 fi
 git init -q -b main "$tmpl"
 printf 'uncommitted work nobody wants deleted\n' > "$tmpl/tests/scratch.txt"

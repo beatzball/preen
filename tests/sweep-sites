@@ -7,7 +7,7 @@
 # the run, and so does a new one that is not here: add or remove the line in the
 # same change, so the review sees which call paths came or went. The failure
 # message prints the lines to add or remove.
-test-diff-list.sh preen-dep
+test-diff-list.sh preen-dep+source
 test-diff-list.sh preen-empty
 test-diff-list.sh preen-list+preen_list
 test-diff-list.sh preen-order
@@ -15,10 +15,10 @@ test-diff-list.sh preen-shim+preen_list_raw
 test-diff-list.sh preen-shim+preen_list_raw+preen_list
 test-diff-list.sh preen-state+preen_state
 test-diff-list.sh preen-test+new_repo
-test-file.sh preen-dep
+test-file.sh preen-dep+source
 test-file.sh preen-file
 test-file.sh preen-state+preen_state
-test-filenames.sh preen-dep
+test-filenames.sh preen-dep+source
 test-filenames.sh preen-ed
 test-filenames.sh preen-edbin
 test-filenames.sh preen-gh+pr_run
@@ -38,37 +38,37 @@ test-filenames.sh preen-state+preen_state
 test-filenames.sh preen-test+new_repo
 test-filenames.sh preen-wtroot
 test-filenames.sh preen-wtroot2
-test-layout.sh preen-dep
+test-layout.sh preen-dep+source
 test-layout.sh preen-layout-gcfg
 test-layout.sh preen-layout-home
 test-layout.sh preen-layout-out
 test-layout.sh preen-layout-shim
 test-layout.sh preen-test+new_repo
-test-pr.sh preen-dep
+test-pr.sh preen-dep+source
 test-pr.sh preen-gh
 test-pr.sh preen-list+preen_list
 test-pr.sh preen-shim+preen_list_raw+preen_list
 test-pr.sh preen-state
 test-pr.sh preen-test+new_repo
-test-prod-drift.sh preen-dep
+test-prod-drift.sh preen-dep+source
 test-prod-drift.sh preen-drift
-test-release-gate.sh preen-dep
+test-release-gate.sh preen-dep+source
 test-release-gate.sh preen-gate
-test-stdin.sh preen-dep
+test-stdin.sh preen-dep+source
 test-stdin.sh preen-notmp
 test-stdin.sh preen-r+rendered_by
 test-stdin.sh preen-test+new_repo
 test-version.sh preen-cbshim
-test-version.sh preen-dep
+test-version.sh preen-dep+source
 test-version.sh preen-shim2+preen_list_raw2
 test-version.sh preen-test+new_repo
 test-version.sh preen-version
 test-version.sh preen-wtbox
 test-version.sh preen-wtlist
-test-width.sh preen-dep
+test-width.sh preen-dep+source
 test-width.sh preen-state+preen_state
 test-width.sh preen-width
-test-worktrees.sh preen-dep
+test-worktrees.sh preen-dep+source
 test-worktrees.sh preen-lead
 test-worktrees.sh preen-lead-raw
 test-worktrees.sh preen-list+preen_list
