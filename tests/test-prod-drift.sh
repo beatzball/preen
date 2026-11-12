@@ -98,13 +98,35 @@ git -C "$repo" reset -q --hard "$b2"
 # But a change that was REVERTED is not outstanding. Production is at b2; a
 # site change lands and is reverted an hour later, so main's site/ matches
 # production again; much later a fresh change lands and is deploying. Only the
-# fresh one is missing, and it is ten minutes old.
+# fresh one is missing, and it is ten minutes old. The fresh change is to the
+# SAME file, so the file's own clock has to be reset by the revert.
 r1=$(commit_at $((t0 + 7200 + 60 * 60)) site/index.md "site change, soon reverted")
 GIT_COMMITTER_DATE="@$((t0 + 7200 + 70 * 60)) +0000" tgit -C "$repo" revert --no-edit "$r1" >/dev/null
-commit_at $((t0 + 7200 + 590 * 60)) site/new.md "fresh site change" >/dev/null
+commit_at $((t0 + 7200 + 590 * 60)) site/index.md "fresh site change" >/dev/null
 serve "$b2"; check 600
 assert_eq "$rc" "0" "a reverted change does not charge its age to the next deploy"
 assert_contains "$out" "pending" "...which is pending, not drift"
+git -C "$repo" reset -q --hard "$b2"
+
+# The same, with the revert landing AFTER the fresh change. The whole site/
+# never matches production again (the fresh page is still new), so only a
+# per-file walk sees that the old change is gone.
+r1=$(commit_at $((t0 + 7200 + 60 * 60)) site/index.md "site change, reverted late")
+commit_at $((t0 + 7200 + 590 * 60)) site/new.md "fresh site change" >/dev/null
+GIT_COMMITTER_DATE="@$((t0 + 7200 + 595 * 60)) +0000" tgit -C "$repo" revert --no-edit "$r1" >/dev/null
+serve "$b2"; check 600
+assert_eq "$rc" "0" "a change reverted after a fresh one lands is not charged to it either"
+git -C "$repo" reset -q --hard "$b2"
+
+# And the control: two old changes in two files, only one reverted. The other
+# is still missing, and still old.
+r1=$(commit_at $((t0 + 7200 + 60 * 60)) site/index.md "old change, reverted")
+r2=$(commit_at $((t0 + 7200 + 61 * 60)) site/other.md "old change, never deployed")
+GIT_COMMITTER_DATE="@$((t0 + 7200 + 595 * 60)) +0000" tgit -C "$repo" revert --no-edit "$r1" >/dev/null
+serve "$b2"; check 600
+assert_eq "$rc" "1" "an old change still missing fails, though another old one was reverted"
+assert_contains "$out" "The oldest, $(git -C "$repo" rev-parse --short "$r2")," \
+  "...and names the one still missing, not the reverted one"
 git -C "$repo" reset -q --hard "$b2"
 
 # ---- the checkout is older than production ----------------------------------

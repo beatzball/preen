@@ -113,20 +113,46 @@ fi
 
 # 4. It does not. Pending, or missing?
 #
-# Walk the site/ commits since the served one, oldest first. Each one that
-# leaves site/ equal to production's again (a revert) clears the clock; the
-# first one after that which does not is where the outstanding change starts.
+# Per FILE, not per tree. For each file under site/ that production lacks,
+# walk the commits since the served one that touched it, oldest first. A
+# commit that leaves the file equal to production's again (a revert) clears
+# that file's clock; the first one after that which does not is when its
+# outstanding change started. The oldest of those starts is the age.
+#
+# Per file because a revert is not always the last word on the tree: an old
+# change B, then a fresh unrelated page C, then a revert of B leaves only C
+# missing -- but the whole tree never matches production again, so a
+# tree-level walk would still charge B's age to C's healthy deploy. The
+# granularity is the file: an old change and a fresh one in the SAME file,
+# with the old one later reverted, still reads as old. Rare enough to accept;
+# the cost is a false alarm, never a missed one.
+#
+# Paths are read one per line from a here-doc so the loop runs in this shell
+# and its variables survive. A site/ file with a newline in its name would be
+# misread; there is none, and the build would not serve one.
 oldest_sha=""
-for c in $(git log --reverse --format=%H "$served..$head_sha" -- site/); do
-  if git diff --quiet "$served" "$c" -- site/; then
-    oldest_sha=""
-  elif [ -z "$oldest_sha" ]; then
-    oldest_sha=$c
+oldest_ct=""
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  start=""
+  for c in $(git log --reverse --format=%H "$served..$head_sha" -- "$p"); do
+    if git diff --quiet "$served" "$c" -- "$p"; then
+      start=""
+    elif [ -z "$start" ]; then
+      start=$c
+    fi
+  done
+  [ -n "$start" ] || continue
+  ct=$(git log -1 --format=%ct "$start")
+  if [ -z "$oldest_ct" ] || [ "$ct" -lt "$oldest_ct" ]; then
+    oldest_sha=$start
+    oldest_ct=$ct
   fi
-done
+done <<EOF
+$(git diff --name-only --no-renames "$served" "$head_sha" -- site/)
+EOF
 [ -n "$oldest_sha" ] ||
   err "site/ differs between $served and $head_sha, but no commit between them touches site/. Read the history by hand."
-oldest_ct=$(git log -1 --format=%ct "$oldest_sha")
 age_min=$(( (now - oldest_ct) / 60 ))
 
 echo "site/ changes on main that production does not have:"
