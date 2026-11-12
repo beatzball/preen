@@ -37,8 +37,9 @@ EOF
 # is what makes the probe's *shape* testable rather than only its answer: `less --help | grep -q` stops reading at the match, the rest of the
 # write takes SIGPIPE, and under the `pipefail` bin/preen sets, the pipeline
 # reports that failure and the flag is silently dropped. Real less races the
-# same way -- its help is 16KB, far under a pipe buffer, because the race needs
-# one write to land after grep has gone, not a full buffer. A shim that names
+# same way, and buffer size has nothing to do with it: the race needs only one
+# write() scheduled after `grep -q` has exited, so a 16KB help, well under a
+# pipe buffer, is enough. A shim that names
 # --mouse last cannot race, and a suite built on one is blind to the bug.
 cat > "$shim/less" <<EOF
 #!/bin/sh
