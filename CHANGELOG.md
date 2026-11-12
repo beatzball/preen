@@ -9,7 +9,7 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **`git config preen.layout inline` starts preen inline** (#8, PR #PR). Set
+- **`git config preen.layout inline` starts preen inline** (#8, PR #62). Set
   it in one repository, or with `--global` for every one. `PREEN_LAYOUT` still
   wins for a single run. The docs used to say this key did nothing.
 
