@@ -39,16 +39,17 @@ function collectBrowserErrors(page: Page): string[] {
 
 test('home renders page-home component', async ({ page }) => {
   await page.goto('/');
-  await page.waitForSelector('page-home');
-  await expect(page.locator('page-home')).toBeVisible();
+  const home = page.locator('page-home:visible');
+  await expect(home).toHaveCount(1);
+  await expect(home).toBeVisible();
+  await expect(home.locator('h1')).toBeVisible();
+  await expect(home.locator('h1')).not.toHaveText('');
 });
 
-// `.first()` here and not on `page-home`: against the BUILT output
-// `litro-outlet` briefly holds a second, hidden `page-docs-slug` alongside the
-// prerendered one while it hydrates, so a bare locator trips Playwright's
-// strict mode with "resolved to 2 elements". Checked with `--repeat-each=5`:
-// only the docs route shows the duplicate, home never does. `litro dev` never
-// shows it either, which is one more thing the preview target sees first.
+// During hydration, litro-outlet can briefly keep a hidden route mirror beside
+// the rendered component. This has occurred for docs in preview and for home
+// in dev. Home requires exactly one visible component and real heading content;
+// the docs assertion below selects the prerendered component at the front.
 test('/docs/getting-started renders', async ({ page }) => {
   await page.goto('/docs/getting-started');
   await page.waitForSelector('page-docs-slug');
