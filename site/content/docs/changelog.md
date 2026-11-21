@@ -22,6 +22,9 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - **`ctrl-l` follows relative Markdown links** in the Markdown picker (#59).
   Choose a link to select its file, or see a message when it is outside the list.
   The link menu requires fzf 0.45 or newer.
+- **Install and upgrade preen with Homebrew** (#58). The tap ships tagged
+  releases and installs the three tools preen needs. Theme and Git setup are
+  optional steps in Getting Started.
 
 ## [0.4.0]
 
