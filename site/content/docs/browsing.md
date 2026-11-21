@@ -86,12 +86,12 @@ opening the picker. Choose a newer range with available parents, or obtain the
 missing history yourself before retrying. Only commits with no parent in their
 stored header compare with the empty tree; preen does not fetch history.
 
-The file picker supports the usual layout toggle, full render, viewed marks
-and editor jump. Viewed progress belongs to the full commit SHA, so opening the
+The file picker supports the usual layout toggle, full render, viewed marks,
+review notes and editor jump. Viewed progress belongs to the full commit SHA, so opening the
 same commit through another range preserves it. `ctrl-e` opens your checkout's
 copy of the path at the first hunk from the commit; your local lines may differ,
 and a missing file opens plainly. The commit list uses `enter` to open files
-and has no editor or viewed action.
+and has no editor, viewed, or review-note action.
 
 ## Viewed files
 
@@ -114,7 +114,7 @@ review progress.
 
 ## Review notes
 
-Press `ctrl-n` in a diff, PR, or worktree file picker to edit a note for the
+Press `ctrl-n` in a diff, PR, commit, or worktree file picker to edit a note for the
 current file in `$EDITOR`. A separate `✎` marks files with notes. The editor
 opens a temporary buffer; saving an empty buffer removes the note. Use a
 waiting editor, for example `EDITOR="code --wait"`. If the editor exits with
@@ -132,11 +132,15 @@ preen notes             # working-tree review
 preen notes diff main   # review against main
 preen notes pr 42       # PR review
 preen notes wt PATH     # worktree review
+preen notes log SHA     # one commit's review
 ```
 
 `preen notes diff` also exports the working-tree review. Run these commands
 inside the repository you used for the review. `PATH` names one of that
-repository's worktrees. Export follows the current file list's order, with
+repository's worktrees. `log SHA` exports the same immutable commit target
+used by the log file picker; a short SHA or single-commit reference such as
+`HEAD` resolves to that full SHA. Ranges are not accepted for this export.
+Export follows the current file list's order, with
 notes for paths that left the diff appended in filename order. Each section
 starts with `## filename`, followed by the note's text. Export is plain text,
 without colors or a pager; an empty review prints nothing. PR export reads

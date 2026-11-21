@@ -23,11 +23,16 @@ box = pathlib.Path(os.environ['NOTE_BOX'])
 state = pathlib.Path(os.environ['PREEN_STATE'])
 raw = sys.stdin.buffer.read()
 args = sys.argv[1:]
-if (state / 'kind').read_text().strip() == 'wt':
+kind = (state / 'kind').read_text().strip()
+if kind in ('wt', 'log-list'):
     if (box / 'entered').exists():
         sys.exit(0)
     (box / 'entered').touch()
-    sys.stdout.buffer.write(raw.split(b'\0')[0] + b'\n')
+    row = raw.split(b'\0')[0]
+    if kind == 'log-list':
+        (box / 'outer-argv').write_text('\n'.join(args))
+        row = next(r for r in raw.split(b'\0') if r.startswith(os.environ['NOTE_COMMIT'].encode() + b'\x1f'))
+    sys.stdout.buffer.write(row + b'\n')
     sys.exit(0)
 (box / 'initial').write_bytes(raw)
 (box / 'argv').write_text('\n'.join(args))
@@ -181,6 +186,47 @@ assert_eq "$(cat "$box/export")" $'## f.txt\nWorktree feedback.' 'worktree targe
 notes_export "$box/wt" diff
 assert_eq "$(cat "$box/export")" '' 'local diff and worktree notes are separate'
 assert_eq "$(snapshot "$box/wt")" "$before" 'worktree remains untouched'
+# Commit-file notes use the immutable SHA target, independent of dirty files.
+tgit clone -q "$other" "$box/log-repo"
+printf 'committed first\n' >> "$box/log-repo/f.txt"
+printf 'committed last\n' > "$box/log-repo/z.txt"
+tgit -C "$box/log-repo" add .; tgit -C "$box/log-repo" commit -qm 'review commit'
+export NOTE_COMMIT="$(git -C "$box/log-repo" rev-parse HEAD)" NOTE_FILE=f.txt NOTE_TEXT='Commit feedback.'
+printf 'local changes stay separate\n' >> "$box/log-repo/f.txt"
+log_before="$(snapshot "$box/log-repo")"
+notes_run "$box/log-repo" note log "$NOTE_COMMIT^!"
+assert_eq "$(cat "$box/rc")" 0 'commit file ctrl-n binding saves a note'
+notes_marked after; assert_true $? 'commit file has a note mark'
+assert_contains "$(cat "$box/argv")" 'ctrl-n note' 'commit file header advertises note key'
+assert_not_contains "$(cat "$box/outer-argv")" 'ctrl-n:' 'commit list does not bind note editing'
+notes_run "$box/log-repo" none log "$NOTE_COMMIT^!"
+notes_marked initial; assert_true $? 'commit note survives picker restart'
+notes_export "$box/log-repo" log "$NOTE_COMMIT"
+assert_eq "$(cat "$box/export")" $'## f.txt\nCommit feedback.' 'commit note exports by full SHA'
+notes_export "$box/log-repo" log "${NOTE_COMMIT:0:12}"
+assert_eq "$(cat "$box/export")" $'## f.txt\nCommit feedback.' 'short SHA resolves the same note target'
+notes_export "$box/log-repo" log HEAD
+assert_eq "$(cat "$box/export")" $'## f.txt\nCommit feedback.' 'single-commit reference resolves the same note target'
+notes_export "$box/log-repo" diff HEAD
+assert_eq "$(cat "$box/export")" '' 'commit and explicit diff notes are isolated'
+notes_export "$box/log-repo" log "$NOTE_COMMIT^"
+assert_eq "$(cat "$box/export")" '' 'different commit SHA has separate notes'
+notes_export "$box/log-repo" log this-commit-does-not-exist
+assert_eq "$?" 1 'invalid notes commit fails'
+assert_contains "$(cat "$box/export-error")" 'invalid notes commit' 'invalid notes commit explains failure'
+notes_export "$box/log-repo" log HEAD..HEAD
+assert_eq "$?" 1 'commit note export rejects ranges'
+notes_export "$box/log-repo" log
+assert_eq "$?" 1 'commit note export requires a commit'
+assert_eq "$(snapshot "$box/log-repo")" "$log_before" 'commit note editing and export do not change checkout'
+tgit -C "$box/log-repo" commit -q --allow-empty -m 'empty review commit'
+notes_export "$box/log-repo" log HEAD
+assert_eq "$?" 0 'empty commit note export succeeds'
+assert_eq "$(cat "$box/export")" '' 'empty commit note export has no phantom sections'
+git clone -q --depth=1 "file://$box/log-repo" "$box/shallow-log"
+notes_export "$box/shallow-log" log HEAD
+assert_eq "$?" 1 'commit note export rejects missing parent history'
+assert_contains "$(cat "$box/export-error")" 'missing first-parent history' 'commit note export preserves shallow-history safety'
 # Refuse stores inside any checkout, even another repository or symlink target.
 for location in "$d/state" "$other/state" "$other/.git/state" "$box/wt/state"; do
   export XDG_STATE_HOME="$location"
@@ -230,3 +276,10 @@ if "$PREEN" --watch-check; then
 fi
 python3 "$PREEN_ROOT/tests/notes-picker.py" "$other" "$box/real-diff" diff
 assert_true $? 'real fzf diff notes, no-match query and filtered save/clear reloads'
+# Exercise notes on the merged log file picker with real fzf, including back.
+tgit clone -q "$other" "$box/log-pty"
+printf 'first\n' > "$box/log-pty/aaa.txt"
+printf 'selected\n' > "$box/log-pty/odd"$'\037'"sep.txt"
+tgit -C "$box/log-pty" add .; tgit -C "$box/log-pty" commit -qm 'note picker commit'
+python3 "$PREEN_ROOT/tests/notes-picker.py" "$box/log-pty" "$box/real-log" log "$(git -C "$box/log-pty" rev-parse HEAD)"
+assert_true $? 'real fzf log notes persist across back and re-enter, then clear without changing ID or query'

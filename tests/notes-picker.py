@@ -34,6 +34,7 @@ observer = box / 'fzf'
 observer.write_text('''#!/bin/bash
 exec -a fzf "$NOTE_PTY_REAL_FZF" "$@" \
   --bind 'load:+execute-silent(printf . >> "$NOTE_PTY/loads")' \
+  --bind 'result:+execute-silent(printf "%s\\000%s\\000%s\\000" {q} "$FZF_TOTAL_COUNT" "$FZF_MATCH_COUNT" > "$NOTE_PTY/result.next"; mv "$NOTE_PTY/result.next" "$NOTE_PTY/result")' \
   --bind 'ctrl-g:execute-silent(printf "%s\\000%s\\000" {1} {q} > "$NOTE_PTY/selected.next"; mv "$NOTE_PTY/selected.next" "$NOTE_PTY/selected")'
 ''')
 observer.chmod(0o755)
@@ -47,7 +48,10 @@ def run(mode):
     pid, fd = pty.fork()
     if pid == 0:
         os.chdir(repo)
-        os.execve('/bin/bash', ['/bin/bash', os.environ['PREEN'], mode], env)
+        argv = ['/bin/bash', os.environ['PREEN'], mode]
+        if mode == 'log':
+            argv.append(sys.argv[4] + '^!')
+        os.execve('/bin/bash', argv, env)
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 36, 150, 0, 0))
     output = bytearray()
 
@@ -107,6 +111,11 @@ def run(mode):
                 if int(parent) in finders and '--watch-await' in command]
 
     try:
+        if mode == 'log':
+            wait_loaded(0, 'commit list did not complete its initial load')
+            before_enter = loads()
+            key(b'\r')
+            wait_loaded(before_enter, 'commit file picker did not complete its load')
         expected = b'0 of 0 viewed' if mode == 'watch' else b'0 of 2 viewed'
         wait(lambda: expected in output, 'initial picker did not render')
         wait_loaded(0, 'initial fzf load did not complete')
@@ -146,6 +155,16 @@ def run(mode):
         assert selected() == initial, 'filtered selection changed after note reload'
         assert notes()[0].with_suffix('.path').read_bytes() == b'odd\x1fsep.txt\0', 'ID lost separator filename'
         assert notes()[0].read_text() == 'PTY feedback.\n', 'saved note bytes changed'
+        if mode == 'log':
+            before_back = loads()
+            key(b'\x1b')
+            wait_loaded(before_back, 'Escape did not reload commit list')
+            before_enter = loads()
+            key(b'\r')
+            wait_loaded(before_enter, 're-enter did not load commit file picker')
+            key(b'odd')
+            assert selected() == initial, 're-entering commit changed selected file or query'
+            assert len(notes()) == 1, 'commit note did not survive back and re-enter'
         if mode == 'watch':
             # Export sees live membership; watcher must also keep following changes.
             before_membership = loads()
@@ -165,10 +184,21 @@ def run(mode):
         key(b'\x03')
     except BaseException:
         captures = {}
-        for name in ('selected', 'loads', 'before', 'editor-buffer'):
+        for name in ('selected', 'result', 'loads', 'before', 'editor-buffer'):
             path = box / name
             captures[name] = repr(path.read_bytes()[:512]) if path.exists() else 'missing'
-        sys.stderr.write('Note picker diagnostics: mode=' + mode + ' captures=' + repr(captures) + '\n')
+        sys.stderr.write('Note picker diagnostics: mode=' + mode + ' generation=' + str(loads()) + ' captures=' + repr(captures) + '\n')
+        sys.stderr.write('Saved note paths: ' + repr([str(path) for path in notes()][:10]) + '\n')
+        try:
+            rows = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command='], timeout=2).decode().splitlines()
+            owned = {pid}
+            for _ in range(4):
+                owned.update(int(fields[0]) for row in rows
+                             if len(fields := row.split(None, 2)) == 3 and int(fields[1]) in owned)
+            relevant = [row[:300] for row in rows if int(row.split(None, 1)[0]) in owned][:15]
+            sys.stderr.write('Picker process rows: ' + repr(relevant) + '\n')
+        except (OSError, subprocess.TimeoutExpired):
+            sys.stderr.write('Picker process rows unavailable\n')
         sys.stderr.write('Terminal tail: ' + repr(bytes(output[-1800:])) + '\n')
         raise
     finally:
@@ -199,8 +229,9 @@ def run(mode):
 
 # Each mode gets its own box and prepares only its disposable repository.
 subprocess.run(['git', '-C', str(repo), 'checkout', '--', 'f.txt'], check=True)
-for name in ('aaa.txt', 'bbb.txt', 'after-note.txt', 'odd\x1fsep.txt'):
-    (repo / name).unlink(missing_ok=True)
+if mode != 'log':
+    for name in ('aaa.txt', 'bbb.txt', 'after-note.txt', 'odd\x1fsep.txt'):
+        (repo / name).unlink(missing_ok=True)
 if mode == 'diff':
     (repo / 'aaa.txt').write_text('first\n')
     (repo / 'odd\x1fsep.txt').write_text('selected\n')

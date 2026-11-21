@@ -1190,12 +1190,13 @@ if [ "${1:-}" = notes ]; then
   NOTES=1; shift
   case "${1:-}" in
     ''|diff|pr) ;;
+    log) [ "$#" = 2 ] && [ -n "$2" ] || die "usage: preen notes log SHA" ;;
     wt|worktrees)
       shift
       [ "$#" = 1 ] || die "usage: preen notes wt PATH"
       NOTES_WT="$(cd -P "$1" 2>/dev/null && pwd)" || die "no such worktree"
       set -- diff ;;
-    *) die "usage: preen notes [diff [REV] | pr [NUMBER] | wt PATH]" ;;
+    *) die "usage: preen notes [diff [REV] | pr [NUMBER] | wt PATH | log SHA]" ;;
   esac
   [ "$#" != 0 ] || set -- diff
 fi
@@ -1224,7 +1225,7 @@ preen — markdown and diffs in the terminal
   preen pr [NUMBER]     browse the files in a GitHub PR (default: this branch)
   preen worktrees       pick a git worktree, then browse what it changed
   preen wt              short for the same
-  preen notes [diff [REV] | pr [NUMBER] | wt PATH]
+  preen notes [diff [REV] | pr [NUMBER] | wt PATH | log SHA]
                         print saved review notes as plain Markdown
   preen FILE.md         render one file, paged, and quit
   ... | preen           render piped input and quit
@@ -1420,7 +1421,7 @@ log_loop() {
     collect_files < "$PREEN_STATE/commit-files"
     review_target log "$sha" || die "cannot identify commit review target"
     LABEL=" preen · commit · ${sha:0:12} "; PROMPT='  file ❯ '
-    HEADER=$'ctrl-d / ctrl-u scroll · pgdn / pgup page\nctrl-s layout · enter open · ctrl-e edit hunk\nctrl-v viewed · esc back · ctrl-c quit'
+    HEADER=$'ctrl-d / ctrl-u scroll · pgdn / pgup page\nctrl-s layout · enter open · ctrl-e edit hunk\nctrl-v viewed · ctrl-n note\nesc back · ctrl-c quit'
     review_picker >/dev/null
     [ ! -f "$PREEN_STATE/quit" ] || return 0
   done
@@ -1491,11 +1492,22 @@ wt_loop() {
 # ---- build the file list -----------------------------------------------------
 LABEL=" preen · $KIND${REV:+ · $REV} "
 if [ "$KIND" = log ]; then
-  command -v delta >/dev/null || die "delta is not installed"
+  [ "$NOTES" = 1 ] || command -v delta >/dev/null || die "delta is not installed"
   # Missing objects in a partial clone must not trigger an implicit fetch.
   export GIT_NO_LAZY_FETCH=1
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
   ROOT="$(git rev-parse --show-toplevel)" && cd "$ROOT" || die "cannot find repository root"
+  if [ "$NOTES" = 1 ]; then
+    # Match log_loop's immutable target even when the caller uses a short SHA
+    # or a single-commit reference. Ranges and missing history stay errors.
+    SHA="$(gitw "" rev-parse --verify --end-of-options "$REV^{commit}" 2>/dev/null)" \
+      || die "invalid notes commit: $REV"
+    printf '%s' "$SHA" > "$PREEN_STATE/commit"
+    commit_files "$SHA" > "$PREEN_STATE/commit-files" || die "cannot list commit files"
+    collect_files < "$PREEN_STATE/commit-files"
+    review_target log "$SHA" || die "cannot identify commit review target"
+    review_notes; exit $?
+  fi
   if [ -n "$REV" ]; then
     gitw "" rev-list --end-of-options "$REV" -- > "$PREEN_STATE/commits" 2>/dev/null \
       || die "invalid log range: $REV"
