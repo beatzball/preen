@@ -32,6 +32,12 @@ It finds every `.md` and `.markdown` file below the directory you name,
 skipping `.git/` and `node_modules/`, and sorts them. The file list is on the
 left; `glow` renders the file under the cursor on the right.
 
+With fzf 0.45 or newer, press `ctrl-l` to choose a relative Markdown link
+from the current file.
+Following a link clears the search and selects its destination in the file
+list. If the destination is outside the list, the picker shows a message
+and stays on the current file. `esc` closes the link menu.
+
 ## `preen diff` — browse changes
 
 ```sh
@@ -251,12 +257,13 @@ one common mistake silently breaks it.
 | `ctrl-e` | open in `$EDITOR` at the first diff hunk (Markdown opens at the top) |
 | `ctrl-n` | edit the current file's review note; save an empty buffer to clear it |
 | `ctrl-v` | mark or unmark the current diff, PR, commit, or worktree file as viewed |
+| `ctrl-l` | choose a relative Markdown link (md mode, fzf 0.45 or newer) |
 | `ctrl-d` / `ctrl-u` | scroll the preview 8 lines |
 | `pgdn` / `pgup` | scroll the preview half a page |
 | `shift-down` / `shift-up` | scroll the preview one line |
 | `home` / `end` | jump the preview to the top or bottom |
 | `ctrl-/` | hide or show the preview |
-| `esc` | quit, or in worktrees/log mode go back one level |
+| `esc` | return from links, worktree files, or commit files, or quit |
 | `ctrl-c` | quit |
 
 `preen watch` keeps these keys while refreshing the list and preview.

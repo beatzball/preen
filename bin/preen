@@ -1123,8 +1123,196 @@ review_picker() {
   VIEWED=false
 }
 
+md_links_supported() {
+  local version major minor
+  version="$(fzf --version </dev/null 2>/dev/null)" || return 1
+  major="${version%%.*}"; minor="${version#*.}"; minor="${minor%%.*}"
+  case "$major:$minor" in *[!0-9:]*|:*|*:) return 1 ;; esac
+  [ "$major" -gt 0 ] || [ "$minor" -ge 45 ]
+}
+
+# Glow already parses Markdown, including reference links and links in tables.
+# A private style marks link destinations with a record separator. Read the
+# original URL from the accompanying OSC 8 sequence, before Glow rewrites it
+# for display. The image style emits no marker.
+md_link_urls() {
+  local style="$PREEN_STATE/md-links.json"
+  printf '%s\n' '{"link":{"format":"\u001e{{.text}}"}}' > "$style" || return 1
+  glow -s "$style" -w 0 "$1" </dev/null 2>/dev/null |
+    LC_ALL=C awk '{
+      while (match($0, /\036\033\]8;[^;]*;[^\007\033]+(\007|\033\\)/)) {
+        url = substr($0, RSTART, RLENGTH)
+        $0 = substr($0, RSTART + RLENGTH)
+        sub(/^\036\033\]8;[^;]*;/, "", url)
+        sub(/(\007|\033\\)$/, "", url)
+        if (url !~ /[[:cntrl:]]/ && !seen[url]++) print url
+      }
+    }'
+}
+
+# The OSC destination retains Markdown escapes. Render it as plain Markdown
+# text, encoding literal punctuation and backslash escapes as references.
+# The two x characters keep whitespace intact at the edges of Glow's output.
+md_link_unescape() {
+  printf '%s\n' "$1" |
+    LC_ALL=C awk 'BEGIN {
+      for (i = 33; i <= 126; i++) ascii[sprintf("%c", i)] = i
+    } {
+      printf "x"
+      while (length($0)) {
+        if (match($0, /^&([a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#[xX][0-9a-fA-F]+);/)) {
+          printf "%s", substr($0, 1, RLENGTH)
+          $0 = substr($0, RLENGTH + 1)
+          continue
+        }
+        n = $0 ~ /^\\[[:punct:]]/ ? 2 : 1
+        c = substr($0, n, 1)
+        if (c ~ /[[:punct:]]/) printf "&#%d;", ascii[c]
+        else printf "%s", c
+        $0 = substr($0, n + 1)
+      }
+      print "x"
+    }' | glow -s "$PREEN_STATE/md-links.json" -w 0 - 2>/dev/null
+}
+
+# Interpret the Markdown, then split the URL into its components. Decode
+# percent escapes last so an encoded # or ? can be part of the filename.
+md_link_path() {
+  local rest="$1" unescaped hex byte
+  case "$rest" in
+    *'&'*|*'\'*)
+      unescaped="$(md_link_unescape "$rest")" || return 1
+      case "$unescaped" in x*x) rest="${unescaped#x}"; rest="${rest%x}" ;; *) return 1 ;; esac
+      ;;
+  esac
+  rest="${rest%%[#?]*}"
+  case "$rest" in ''|/*) return 1 ;; esac
+  case "${rest%%/*}" in *:*) return 1 ;; esac
+  MD_LINK_PATH=""
+  while [[ "$rest" = *%* ]]; do
+    MD_LINK_PATH+="${rest%%\%*}"
+    rest="${rest#*%}"
+    hex="${rest:0:2}"
+    case "$hex" in
+      00) return 1 ;;
+      [[:xdigit:]][[:xdigit:]]) printf -v byte '%b' "\\x$hex" ;;
+      *) return 1 ;;
+    esac
+    MD_LINK_PATH+="$byte"
+    rest="${rest:2}"
+  done
+  MD_LINK_PATH+="$rest"
+  case "$MD_LINK_PATH" in
+    /*) return 1 ;;
+    *.md|*.markdown) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Resolve dot segments as URL paths. Keep symlink aliases and spelling
+# differences distinct so the result has to name an actual row of this picker.
+md_absolute_path() {
+  local rest="$1" part
+  case "$rest" in /*) ;; *) rest="$PWD/$rest" ;; esac
+  MD_ABSOLUTE_PATH=""
+  while [ -n "$rest" ]; do
+    part="${rest%%/*}"
+    case "$rest" in */*) rest="${rest#*/}" ;; *) rest="" ;; esac
+    case "$part" in
+      ''|.) ;;
+      ..) MD_ABSOLUTE_PATH="${MD_ABSOLUTE_PATH%/*}" ;;
+      *) MD_ABSOLUTE_PATH="$MD_ABSOLUTE_PATH/$part" ;;
+    esac
+  done
+}
+
+# An empty filter exposes the main picker's unfiltered order and skips its
+# header rows. Use the same field delimiter and keep the full path even when
+# the user sets an accepted-output projection.
+md_selectable_files() {
+  local projection=()
+  # Older fzf releases have no --accept-nth option to override.
+  if FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' \
+    fzf --accept-nth=.. --filter='' <<< preen >/dev/null 2>&1; then
+    projection=(--accept-nth=..)
+  fi
+  fzf --filter='' --sync --read0 --print0 --no-print-query --no-expect \
+    --no-ansi --with-nth='..' --delimiter="$WT_SEP" \
+    ${projection[@]+"${projection[@]}"} < "$PREEN_STATE/decorated"
+}
+
+md_pick_link() {
+  local file="$1" links="$PREEN_STATE/md-links" action="$PREEN_STATE/md-link-action"
+  local url chosen dir target row pos=0
+  [ -n "$file" ] && [ ! -e "$PREEN_STATE/md-link-position" ] || return 0
+  if ! md_link_urls "$file" | while IFS= read -r url; do
+    if md_link_path "$url"; then printf '%s\n' "$url"; fi
+  done > "$links"; then
+    printf 'unavailable\n' > "$action"
+    return
+  fi
+  if [ ! -s "$links" ]; then
+    printf 'empty\n' > "$action"
+    return
+  fi
+  chosen="$(FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' fzf \
+    --layout=reverse --border=rounded --prompt='  link ❯ ' \
+    --header='enter follow · esc back · ctrl-c quit' \
+    --bind 'enter:accept-non-empty' \
+    --bind 'ctrl-c:execute-silent(touch "$PREEN_STATE/quit")+abort' < "$links")" \
+    || { printf 'back\n' > "$action"; return; }
+  md_link_path "$chosen" || return 0
+  dir=.
+  case "$file" in */*) dir="${file%/*}" ;; esac
+  md_absolute_path "$dir/$MD_LINK_PATH"
+  target="$MD_ABSOLUTE_PATH"
+  while IFS= read -r -d '' row; do
+    pos=$((pos + 1))
+    md_absolute_path "$row"
+    if [ "$MD_ABSOLUTE_PATH" = "$target" ] && [ -f "$row" ] && [ ! -L "$row" ]; then
+      printf '%s\n' "$pos" > "$action"
+      return
+    fi
+  done < <(md_selectable_files)
+  printf 'outside\n' > "$action"
+}
+
+md_link_action() {
+  local action="$PREEN_STATE/md-link-action" position="$PREEN_STATE/md-link-position" result
+  [ "$1" != load ] || action="$position"
+  IFS= read -r result 2>/dev/null < "$action" || return 0
+  rm -f "$action"
+  if [ "$1" = load ]; then
+    case "$result" in
+      ''|*[!0-9]*) ;;
+      *) printf 'pos(%s)' "$result" ;;
+    esac
+    return
+  fi
+  if [ -f "$PREEN_STATE/quit" ]; then
+    printf 'abort'
+    return
+  fi
+  case "$result" in
+    ''|*[!0-9]*) ;;
+    *)
+      # pos uses the filtered results. Apply it after the cleared list loads.
+      printf '%s\n' "$result" > "$position" || return 1
+      printf 'change-border-label( preen · md )+clear-query+reload-sync(cat "$PREEN_STATE/decorated")'
+      return ;;
+  esac
+  case "$result" in
+    empty) printf 'change-border-label( preen · md · no relative Markdown links )' ;;
+    outside) printf 'change-border-label( preen · md · link target is outside the file list )' ;;
+    unavailable) printf 'change-border-label( preen · md · cannot read Markdown links )' ;;
+    back) printf 'change-border-label( preen · md )' ;;
+  esac
+}
+
 # ---- hooks fzf calls back into ----------------------------------------------
 case "${1:-}" in
+  --md-links) md_pick_link "${2:-}"; exit $? ;;
+  --md-link-action) md_link_action "$2"; exit $? ;;
   --edit)
     edit_file "$2" "${3:-$2}"
     exit $? ;;
@@ -1281,8 +1469,9 @@ keys inside the picker
            notes persist with a separate ✎ mark; export with preen notes
   ctrl-e   open in $EDITOR at the first diff hunk (Markdown opens at the top)
            known editors get a line jump; unknown editors open plainly
+  ctrl-l   choose a relative Markdown link in md mode (fzf 0.45 or newer)
   ctrl-/   hide or show the preview
-  esc      quit, or in worktrees/log mode go back one level
+  esc      go back from links, worktree files, or commit files, or quit
   ctrl-c   quit
 H
     exit 0 ;;
@@ -1342,8 +1531,19 @@ WITH_NTH='..'; PICK='{}'; EDIT='{}'; ENTER=""; VIEWED=false
 # openable. The ${FILES[@]+...} guard is for bash 3.2, which treats an empty
 # array as unset under set -u.
 run_picker() {
-  local watch_args=() review_binds=() edit_action="execute(\"\$PREEN_SELF\" --edit $PICK $EDIT)" preview_action="\"\$PREEN_SELF\" --preview $PICK"
-  [ "$(cat "$PREEN_STATE/kind")" != log-list ] || edit_action=ignore
+  local watch_args=() review_binds=() md_args=()
+  local edit_action="execute(\"\$PREEN_SELF\" --edit $PICK $EDIT)" preview_action="\"\$PREEN_SELF\" --preview $PICK"
+  case "$(cat "$PREEN_STATE/kind")" in
+    log-list) edit_action=ignore ;;
+    md)
+      if md_links_supported; then
+        HEADER="$HEADER"$'\nctrl-l links'
+        md_args=(--sync
+          --bind 'ctrl-l:execute("$PREEN_SELF" --md-links {})+transform("$PREEN_SELF" --md-link-action pick)'
+          --bind 'load:transform("$PREEN_SELF" --md-link-action load)')
+      fi
+      ;;
+  esac
   if [ "$VIEWED" = true ]; then
     review_list > "$PREEN_STATE/decorated"
     HEADER="$(review_header)"
@@ -1369,7 +1569,7 @@ run_picker() {
       --bind 'load:bg-cancel+transform-header("$PREEN_SELF" --watch-header)+refresh-preview+bg-transform("$PREEN_SELF" --watch-await)')
     HEADER="$(watch_header)"
   fi
-  fzf ${review_binds[@]+"${review_binds[@]}"} ${watch_args[@]+"${watch_args[@]}"} \
+  fzf ${review_binds[@]+"${review_binds[@]}"} ${watch_args[@]+"${watch_args[@]}"} ${md_args[@]+"${md_args[@]}"} \
     --read0 \
     --ansi --no-multi --cycle \
     --layout=reverse \
