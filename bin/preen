@@ -1144,14 +1144,26 @@ roost_review_status() {
       }
       return out s
     }
-    function pane(    cwd, address, label, name, agent) {
+    function active_agent(harness, command, state, session) {
+      if (state !~ /^"(idle|working|done|error)"$/ || session !~ /^".+"$/) return 0
+      # The registered cwd and session can survive the agent exiting. Require
+      # the live foreground command to agree with the registered harness.
+      # Claude Code can report its version as the command. Generic runtimes
+      # such as node and bun could just as easily be unrelated shell jobs.
+      if (harness == "\"claude\"") return command ~ /^"(claude|[0-9]+\.[0-9]+\.[0-9]+)"$/
+      return harness ~ /^"(codex|copilot|opencode|pi)"$/ && command == harness
+    }
+    function pane(    cwd, address, label, name, agent, harness, session) {
+      harness = fields["\"harness\""]
+      session = fields["\"session_id\""]
+      if (!active_agent(harness, fields["\"command\""], fields["\"state\""], session)) return
       cwd = directory(fields["\"cwd\""])
       # Roost replaces invalid UTF-8 with U+FFFD without a per-cwd flag.
       if (cwd !~ /^\// || index(cwd, utf8(65533))) return
       if (fields["\"id\""] !~ /^"%[0-9]+"$/ || fields["\"window_id\""] !~ /^"@[0-9]+"$/) return
       address = ":" substr(fields["\"window_id\""], 2, length(fields["\"window_id\""])-2) "." \
                       substr(fields["\"id\""], 2, length(fields["\"id\""])-2)
-      agent = fields["\"session_id\""]
+      agent = harness ":" session
       # A window linked into two sessions can list the same pane twice.
       if (address in directories) {
         if (cwd != directories[address] || agent != agents[address]) exit 1
@@ -1219,8 +1231,8 @@ roost_review_status() {
 }
 
 worktree_review_send() (
-  local repo kind dir work roost payload cwd target name agent choice answer path
-  local i selected=0 matches=0 rc
+  local repo kind dir work roost payload bytes cwd target name agent choice answer path
+  local i selected=0 matches=0 attempted=0 rc
   local targets=() names=() agents=() FILES=()
   # fzf supplies the file list on stdin and captures its own stdout.
   # Prompts and decisions belong to the controlling terminal.
@@ -1239,6 +1251,12 @@ worktree_review_send() (
     printf 'Could not read saved review notes.\n'
   elif [ ! -s "$work/notes" ]; then
     printf 'No saved review notes for this worktree.\n'
+  elif ! bytes="$(wc -c < "$work/notes")"; then
+    printf 'Could not measure the saved review notes.\n'
+  # roost takes the payload in one argv entry. Leave room below Linux's
+  # per-argument ceiling (128 KiB on 4 KiB pages) and macOS's total limit.
+  elif [ "$bytes" -gt 65536 ]; then
+    printf 'Review notes exceed the 64 KiB roost send limit in preen.\n'
   elif ! LC_ALL=C tr -d '\000-\010\013-\037\177' < "$work/notes" | cmp -s "$work/notes" -; then
     printf 'The notes contain terminal control bytes. Export them to review separately.\n'
   elif ! roost="$(command -v roost)"; then
@@ -1272,8 +1290,9 @@ worktree_review_send() (
         printf 'Send to %s? Type yes to send: ' "${targets[selected]}"
         IFS= read -r answer && [ "$answer" = yes ] || return 0
 
-        # Recheck after the prompt. Qualify the live pane ID with its live
-        # window ID so roost never interprets it as an old bare %N alias.
+        # Recheck the active agent after the prompt. The qualified address
+        # avoids stale aliases. Current roost cannot guard the later paste
+        # against the foreground process changing again inside the same pane.
         if roost_review_status "$roost" > "$work/status"; then
           while IFS= read -r -d '' cwd && IFS= read -r -d '' target &&
                 IFS= read -r -d '' name && IFS= read -r -d '' agent; do
@@ -1281,21 +1300,26 @@ worktree_review_send() (
               [ "$dir" -ef "$cwd" ] || continue
             # read -d preserves the trailing newlines in the displayed export.
             IFS= read -r -d '' payload < "$work/notes" || :
+            attempted=1
             rc=0
             "$roost" send "$target" "$payload" || rc=$?
             case "$rc" in
               0) printf 'Review notes sent to %s.\n' "$target" ;;
               4) printf 'roost submitted the notes to %s without observing a new turn.\n' "$target" ;;
-              *) printf 'roost exited %d. Check pane %s for delivery.\n' "$rc" "$target" ;;
+              *)
+                printf 'roost exited %d. Check pane %s before sending manually.\n' "$rc" "$target"
+                break ;;
             esac
             printf 'Press Enter to return to the worktree. '
             IFS= read -r answer || :
             return 0
           done < "$work/status"
         fi
-        printf 'The selected roost pane changed or is unavailable.\n'
+        if [ "$attempted" = 0 ]; then
+          printf 'The selected roost pane changed or is unavailable.\n'
+        fi
       else
-        printf 'No roost pane is on this worktree.\n'
+        printf 'No active, identified roost agent is available on this worktree.\n'
       fi
     else
       rc=$?

@@ -153,10 +153,11 @@ without colors or a pager; an empty review prints nothing. PR export reads
 the current PR list over the network, just as the picker does.
 
 In a worktree's file picker, press `ctrl-y` to send all its saved notes
-through roost. When several panes report that worktree as their working
-directory, pick a pane by number. Read the Markdown and the target pane,
-then type `yes` to send. If roost or a matching pane is unavailable, preen
-shows the saved note paths and the export command.
+through roost. When several active, identified agents match the worktree,
+pick a pane by number. Read the Markdown and the target pane, then type
+`yes` to send. The foreground command must identify the registered agent.
+If roost or a matching agent is unavailable, or the export exceeds
+64 KiB, preen shows the saved note paths and the export command.
 
 ## `preen watch` — follow changes as they happen
 

@@ -27,7 +27,9 @@ box = Path(os.environ["SEND_BOX"])
 with (box / "calls").open("a") as log:
     print(json.dumps(sys.argv[1:]), file=log)
 if sys.argv[1:] == ["status", "--json"]:
-    sys.stdout.buffer.write((box / "status.json").read_bytes())
+    recheck = box / "recheck.json"
+    snapshot = recheck if recheck.exists() and len((box / "calls").read_text().splitlines()) == 2 else box / "status.json"
+    sys.stdout.buffer.write(snapshot.read_bytes())
     sys.exit()
 assert sys.argv[1] == "send" and len(sys.argv) == 4, sys.argv[1:]
 sys.exit(int((box / "send-exit").read_text()))
@@ -133,19 +135,20 @@ def calls():
     return [json.loads(line) for line in lines('calls')]
 
 
-def status(*panes, running=True):
-    (box / 'status.json').write_text(json.dumps({
+def status(*panes, running=True, file='status.json'):
+    (box / file).write_text(json.dumps({
         'panes': panes, 'schema': 1, 'command': 'status', 'running': running, 'sessions': [],
     }, indent=2))
 
 
 def pane(pane_id, cwd, label, index):
     return dict(id=f'%{pane_id}', cwd=str(cwd), name=label, session='review', window_id='@22',
-                window_index=2, pane_index=index, session_id=f'agent-{pane_id}')
+                window_index=2, pane_index=index, session_id=f'agent-{pane_id}',
+                harness='codex', command='codex', state='idle')
 
 
 def case(*panes, running=True, send_exit=0):
-    for name in ('calls', 'loads'):
+    for name in ('calls', 'loads', 'recheck.json'):
         (box / name).unlink(missing_ok=True)
     status(*panes, running=running)
     (box / 'send-exit').write_text(str(send_exit))
@@ -154,7 +157,7 @@ def case(*panes, running=True, send_exit=0):
 alias = box / 'worktree-alias'
 alias.symlink_to(worktree, target_is_directory=True)
 first = pane(9, alias, 'first "reviewer"', 1)
-second = pane(10, worktree, 'second reviewer', 2)
+second = dict(pane(10, worktree, 'second reviewer', 2), harness='claude', command='2.1.322', state='done')
 unrelated_path = box / 'other' / worktree.name
 unrelated_path.mkdir(parents=True)
 unrelated = dict(pane(90, unrelated_path, 'unrelated reviewer', 3), was='%9',
@@ -215,23 +218,41 @@ with Picker('wt') as picker:
     picker.expect(b'ctrl-y send notes')
     assert calls() == [['status', '--json'], ['status', '--json']]
 
-# A reused address with a different agent identity must require a fresh choice.
-case(first)
-with Picker('wt') as picker:
-    picker.visit_worktree()
-    picker.key(b'\x19')
-    picker.expect(b'Type yes to send:')
-    status(dict(first, session_id='another-agent'))
-    picker.key(b'yes\r')
-    picker.expect(b'The selected roost pane changed or is unavailable.')
-    picker.expect(saved_note_name)
-    picker.expect(b'Press Enter')
-    assert calls() == [['status', '--json'], ['status', '--json']]
-    picker.key(b'\r')
-    picker.expect(b'ctrl-y send notes')
+shell = dict(first, command='bash')
+for changed in (dict(first, session_id='another-agent'), shell, dict(shell, state=None)):
+    case(first)
+    # Fake roost exposes the changed pane only when called after the user
+    # confirms. The shell keeps the original cwd, harness, and session ID.
+    status(changed, file='recheck.json')
+    with Picker('wt') as picker:
+        picker.visit_worktree()
+        picker.key(b'\x19')
+        picker.expect(b'Type yes to send:')
+        assert calls() == [['status', '--json']]
+        picker.key(b'yes\r')
+        picker.expect(b'The selected roost pane changed or is unavailable.')
+        picker.expect(saved_note_name)
+        picker.expect(b'Press Enter')
+        assert calls() == [['status', '--json'], ['status', '--json']]
+        picker.key(b'\r')
+        picker.expect(b'ctrl-y send notes')
+
+no_agent = b'No active, identified roost agent is available on this worktree.'
+ineligible = (
+    shell,
+    dict(shell, id='%11', state=None),
+    dict(first, id='%12', session_id=''),
+    dict(first, id='%13', harness=None),
+    dict(first, id='%14', state=None),
+    dict(first, id='%15', harness='pi', command='node'),
+    dict(first, id='%16', harness='unknown', command='unknown'),
+    dict(first, id='%17', harness='codex', command='claude'),
+    dict(first, id='%18', state='blocked'),
+)
 
 for panes, running, message in (
-    ((unrelated,), True, b'No roost pane is on this worktree.'),
+    ((unrelated,), True, no_agent),
+    (ineligible, True, no_agent),
     ((), False, b'roost is not running.'),
 ):
     case(*panes, running=running)
@@ -252,7 +273,7 @@ bare_path = box / 'without-roost'
 bare_path.mkdir()
 for tool in ('awk', 'basename', 'bash', 'cat', 'cmp', 'cut', 'delta', 'dirname',
              'git', 'glow', 'grep', 'head', 'mkdir', 'mktemp', 'mv', 'ps', 'readlink',
-             'rm', 'sed', 'sort', 'stty', 'tail', 'touch', 'tr'):
+             'rm', 'sed', 'sort', 'stty', 'tail', 'touch', 'tr', 'wc'):
     if resolved := shutil.which(tool):
         (bare_path / tool).symlink_to(resolved)
 (bare_path / 'fzf').symlink_to(observer)
@@ -264,6 +285,41 @@ with Picker('wt', path=str(bare_path)) as picker:
     picker.expect(saved_note_name)
     picker.expect(b'Press Enter')
     assert not calls(), calls()
+    picker.key(b'\r')
+    picker.expect(b'ctrl-y send notes')
+
+# The export is too large for one argv entry. Fall back before opening a
+# confirmation or starting roost.
+case(first)
+try:
+    note.write_bytes('é'.encode() * 1100000)
+    with Picker('wt') as picker:
+        picker.visit_worktree()
+        picker.key(b'\x19')
+        picker.expect(b'Review notes exceed the 64 KiB roost send limit')
+        picker.expect(saved_note_name)
+        picker.expect(b'Export them with preen notes wt')
+        picker.expect(b'Press Enter')
+        assert not calls(), calls()
+        assert b'Type yes to send:' not in picker.output
+        picker.key(b'\r')
+        picker.expect(b'ctrl-y send notes')
+finally:
+    note.write_bytes(original_note)
+
+# A command that actually ran can also exit 126. Keep that outcome ambiguous
+# and offer the export fallback without attempting a second send.
+case(first, send_exit=126)
+with Picker('wt') as picker:
+    picker.visit_worktree()
+    picker.key(b'\x19')
+    picker.expect(b'Type yes to send:')
+    picker.key(b'yes\r')
+    picker.expect(b'roost exited 126. Check pane :@22.%9 before sending manually.')
+    picker.expect(saved_note_name)
+    picker.expect(b'Press Enter')
+    assert calls() == [['status', '--json'], ['status', '--json'],
+                       ['send', ':@22.%9', expected.decode()]]
     picker.key(b'\r')
     picker.expect(b'ctrl-y send notes')
 
