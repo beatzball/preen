@@ -1226,6 +1226,21 @@ md_absolute_path() {
   done
 }
 
+# An empty filter exposes the main picker's unfiltered order and skips its
+# header rows. Use the same field delimiter and keep the full path even when
+# the user sets an accepted-output projection.
+md_selectable_files() {
+  local projection=()
+  # Older fzf releases have no --accept-nth option to override.
+  if FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' \
+    fzf --accept-nth=.. --filter='' <<< preen >/dev/null 2>&1; then
+    projection=(--accept-nth=..)
+  fi
+  fzf --filter='' --sync --read0 --print0 --no-print-query --no-expect \
+    --no-ansi --with-nth='..' --delimiter="$WT_SEP" \
+    ${projection[@]+"${projection[@]}"} < "$PREEN_STATE/decorated"
+}
+
 md_pick_link() {
   local file="$1" links="$PREEN_STATE/md-links" action="$PREEN_STATE/md-link-action"
   local url chosen dir target row pos=0
@@ -1258,10 +1273,7 @@ md_pick_link() {
       printf '%s\n' "$pos" > "$action"
       return
     fi
-  # An empty filter exposes the main picker's unfiltered order and skips its
-  # header rows. Keep the user's --tac and --header-lines in effect here too.
-  done < <(fzf --filter='' --sync --read0 --print0 --no-print-query --no-expect \
-    --no-ansi --with-nth='..' < "$PREEN_STATE/decorated")
+  done < <(md_selectable_files)
   printf 'outside\n' > "$action"
 }
 

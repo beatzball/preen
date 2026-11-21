@@ -42,7 +42,14 @@ cat > "$box/shim/fzf" <<'SH'
 #!/bin/sh
 [ "$1" != --version ] || { printf '%s\n' "${PREEN_T_FZF_VERSION:-0.45.0}"; exit 0; }
 case " $* " in
-  *' --filter= '*) cat ;;
+  ' --accept-nth=.. --filter= '*)
+    [ "${PREEN_T_ACCEPT_NTH:-0}" = 1 ] || exit 2
+    cat
+    ;;
+  *' --filter= '*)
+    printf '%s\n' "$@" > "$PREEN_T_BOX/filter-args"
+    cat
+    ;;
   *' --read0 '*)
     cat > "$PREEN_T_BOX/state/decorated"
     printf '%s\n' "$@" > "$PREEN_T_BOX/args"
@@ -73,9 +80,15 @@ out="$(pick '../file%0Aname%23.md?q=1#top')"
 assert_contains "$out" 'clear-query+reload-sync' 'following clears the query and reloads the complete list'
 assert_eq "$("$PREEN" --md-link-action load)" 'pos(4)' 'encoded URL selects the exact NUL-framed row'
 assert_eq "$("$PREEN" --md-link-action load)" '' 'load consumes the stored position'
+assert_not_contains "$(cat "$box/filter-args")" '--accept-nth' 'fzf 0.45 lookup uses supported options'
 assert_eq "$(cat "$box/menu")" "$(printf '%s\n' '../file%0Aname%23.md?q=1#top' \
   '../node_modules/hidden.md' '../alias.md' '../../outside.md' '../missing.markdown' '../a&amp;b.md' '../a\&amp;b.md')" \
   'menu lists unique relative Markdown URLs and skips images, absolute URLs, and other files'
+
+out="$(PREEN_T_ACCEPT_NTH=1 pick '../file%0Aname%23.md?q=1#top')"
+assert_contains "$(cat "$box/filter-args")" '--accept-nth=..' 'lookup overrides accepted-output projections where supported'
+assert_contains "$(cat "$box/filter-args")" $'--delimiter=\037' 'lookup uses the same delimiter as the main picker'
+assert_eq "$("$PREEN" --md-link-action load)" 'pos(4)' 'full-row projection keeps the original path'
 
 out="$(pick '../a&amp;b.md')"
 assert_contains "$out" 'clear-query+reload-sync' 'a CommonMark entity is decoded before following'
