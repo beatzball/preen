@@ -112,6 +112,36 @@ checkout. Set `XDG_STATE_HOME` to an absolute directory outside your repositorie
 to choose another location. Removing the `preen/` state directory clears saved
 review progress.
 
+## Review notes
+
+Press `ctrl-n` in a diff, PR, or worktree file picker to edit a note for the
+current file in `$EDITOR`. A separate `✎` marks files with notes. The editor
+opens a temporary buffer; saving an empty buffer removes the note. Use a
+waiting editor, for example `EDITOR="code --wait"`. If the editor exits with
+an error, the saved note stays as it was.
+
+Notes survive restarting the same review and remain when the file's diff
+changes or disappears. They share the viewed-mark store outside checkouts,
+with separate notes for each repository and comparison. Markdown mode has
+no review notes.
+
+Print the notes as plain Markdown to paste or pipe elsewhere:
+
+```sh
+preen notes             # working-tree review
+preen notes diff main   # review against main
+preen notes pr 42       # PR review
+preen notes wt PATH     # worktree review
+```
+
+`preen notes diff` also exports the working-tree review. Run these commands
+inside the repository you used for the review. `PATH` names one of that
+repository's worktrees. Export follows the current file list's order, with
+notes for paths that left the diff appended in filename order. Each section
+starts with `## filename`, followed by the note's text. Export is plain text,
+without colors or a pager; an empty review prints nothing. PR export reads
+the current PR list over the network, just as the picker does.
+
 ## `preen watch` — follow changes as they happen
 
 ```sh
@@ -215,6 +245,7 @@ one common mistake silently breaks it.
 | `ctrl-s` | toggle side-by-side / inline (diff, pr, log and worktree files) |
 | `enter` | open files from a commit or worktree list; otherwise open the full render in a pager |
 | `ctrl-e` | open in `$EDITOR` at the first diff hunk (Markdown opens at the top) |
+| `ctrl-n` | edit the current file's review note; save an empty buffer to clear it |
 | `ctrl-v` | mark or unmark the current diff, PR, commit, or worktree file as viewed |
 | `ctrl-d` / `ctrl-u` | scroll the preview 8 lines |
 | `pgdn` / `pgup` | scroll the preview half a page |
@@ -266,7 +297,7 @@ Smooth scrolling would need something that redraws on its own tick, which a
 
 - **No inline images.** tmux swallows the kitty graphics escapes and dumps the
   payload into the pane title. `mdcat` was tried and dropped for this reason.
-- **No editing.** `ctrl-e` hands the file to `$EDITOR` and that is as far as it
-  goes.
+- **File edits use your editor.** `ctrl-e` opens the checkout file in
+  `$EDITOR`; `ctrl-n` opens a review note stored outside the checkout.
 
 Next: [Pipes](/docs/pipes), or [Pull requests](/docs/pull-requests).

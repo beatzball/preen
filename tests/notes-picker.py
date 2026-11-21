@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Exercise note actions in real fzf, including empty matches and watch races."""
+import fcntl
+import os
+from pathlib import Path
+import pty
+import select
+import signal
+import struct
+import subprocess
+import sys
+import termios
+import time
+
+repo, box = map(Path, sys.argv[1:])
+box.mkdir(parents=True)
+editor = box / 'editor'
+editor.write_text('''#!/bin/sh
+printf '%s' "$1" > "$NOTE_PTY/editor-buffer"
+cat "$1" > "$NOTE_PTY/before"
+touch "$NOTE_PTY/entered"
+while [ -f "$NOTE_PTY/hold" ] && [ ! -f "$NOTE_PTY/release" ]; do sleep 0.02; done
+cat "$NOTE_PTY/text" > "$1"
+''')
+editor.chmod(0o755)
+(box / 'text').write_text('PTY feedback.\n')
+env = dict(os.environ, TERM='xterm-256color', SHELL='/bin/bash',
+           XDG_STATE_HOME=str(box / 'state'), EDITOR=str(editor), NOTE_PTY=str(box),
+           FZF_DEFAULT_OPTS='--bind \'ctrl-g:execute-silent(printf "%s" {1} > "$NOTE_PTY/selected")\'')
+
+
+def run(mode):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir(repo)
+        os.execve('/bin/bash', ['/bin/bash', os.environ['PREEN'], mode], env)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 36, 150, 0, 0))
+    output = bytearray()
+
+    def pump(seconds):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if not select.select([fd], [], [], max(0, end - time.monotonic()))[0]:
+                continue
+            try:
+                data = os.read(fd, 65536)
+            except OSError:
+                break
+            if not data:
+                break
+            output.extend(data)
+            if b'\x1b[6n' in data:
+                os.write(fd, b'\x1b[1;1R')
+
+    def key(data, seconds=0.3):
+        os.write(fd, data)
+        pump(seconds)
+
+    def wait(check, reason):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if check():
+                return
+            pump(0.1)
+        raise AssertionError(reason)
+
+    def selected():
+        path = box / 'selected'
+        path.unlink(missing_ok=True)
+        key(b'\x07')
+        wait(path.exists, 'selection callback did not run')
+        return path.read_bytes()
+
+    def notes():
+        return list((box / 'state').rglob('*.note'))
+
+    def waiters():
+        rows = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command=']).decode().splitlines()
+        table = [row.split(None, 2) for row in rows if len(row.split(None, 2)) == 3]
+        finders = {int(child) for child, parent, command in table
+                   if int(parent) == pid and command.startswith('fzf ')}
+        return [int(child) for child, parent, command in table
+                if int(parent) in finders and '--watch-await' in command]
+
+    try:
+        expected = b'0 of 0 viewed' if mode == 'watch' else b'0 of 2 viewed'
+        wait(lambda: expected in output, 'initial picker did not render')
+        if mode == 'watch':
+            wait(lambda: len(waiters()) == 1, 'watch waiter did not start')
+            original_waiter = waiters()
+            # Empty ctrl-n must leave the polling callback alive.
+            key(b'\x0e')
+            assert not (box / 'entered').exists(), 'empty picker launched editor'
+            assert waiters() == original_waiter, 'empty note action replaced or canceled waiter'
+            (repo / 'aaa.txt').write_text('new first file\n')
+            (repo / 'odd\x1fsep.txt').write_text('new selected file\n')
+            wait(lambda: b'0 of 2 viewed' in output, 'empty note action stopped watch polling')
+        key(b'NO_MATCH_QUERY')
+        key(b'\x0e')
+        assert not (box / 'entered').exists(), 'no-match note launched editor'
+        key(b'\x7f' * len('NO_MATCH_QUERY') + b'odd')
+        initial = selected()
+        assert initial, 'filtered selection empty'
+        if mode == 'watch':
+            (box / 'hold').touch()
+        key(b'\x0e')
+        wait(lambda: (box / 'entered').exists(), 'note editor did not open')
+        if mode == 'watch':
+            assert not waiters(), 'note editor did not cancel watch before opening'
+            # Change list membership and contents while editor holds the screen.
+            (repo / 'aaa.txt').unlink()
+            (repo / 'bbb.txt').write_text('inserted while editing\n')
+            (repo / 'odd\x1fsep.txt').write_text('changed while editing\n')
+            (box / 'release').touch()
+        wait(lambda: len(notes()) == 1, 'note did not save')
+        wait(lambda: '✎'.encode() in output, 'note marker did not render')
+        assert selected() == initial, 'filtered selection changed after note reload'
+        assert notes()[0].with_suffix('.path').read_bytes() == b'odd\x1fsep.txt\0', 'ID lost separator filename'
+        assert notes()[0].read_text() == 'PTY feedback.\n', 'saved note bytes changed'
+        if mode == 'watch':
+            # Export sees live membership; watcher must also keep following changes.
+            (repo / 'after-note.txt').write_text('poller still runs\n')
+            start = len(output)
+            wait(lambda: b'0 of 3 viewed' in output[start:], 'watch did not resume after note reload')
+            wait(lambda: len(waiters()) == 1, 'note reload left extra or missing watch waiters')
+        (box / 'entered').unlink()
+        (box / 'text').write_text('')
+        key(b'\x0e')
+        wait(lambda: not notes(), 'empty buffer did not clear note')
+        assert (box / 'before').read_text() == 'PTY feedback.\n', 'editor did not receive saved note'
+        assert selected() == initial, 'clearing note changed filtered selection'
+        key(b'\x03')
+    except BaseException:
+        sys.stderr.write('Terminal tail: ' + repr(bytes(output[-1800:])) + '\n')
+        raise
+    finally:
+        (box / f'{mode}-terminal.log').write_bytes(output)
+        os.close(fd)
+        done, _ = os.waitpid(pid, os.WNOHANG)
+        if not done:
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except (PermissionError, ProcessLookupError):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                done, _ = os.waitpid(pid, os.WNOHANG)
+                if done:
+                    break
+                time.sleep(0.05)
+            else:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                os.waitpid(pid, 0)
+
+
+# The fixture is disposable; reset only that repository's tracked file.
+subprocess.run(['git', '-C', str(repo), 'checkout', '--', 'f.txt'], check=True)
+run('watch')
+for name in ('aaa.txt', 'bbb.txt', 'after-note.txt'):
+    (repo / name).unlink(missing_ok=True)
+(repo / 'aaa.txt').write_text('first\n')
+(box / 'entered').unlink(missing_ok=True)
+(box / 'text').write_text('PTY feedback.\n')
+run('diff')

@@ -16,6 +16,11 @@ and this project uses [Semantic Versioning](https://semver.org/).
   Viewed marks persist per commit, and `ctrl-e` opens your local file at the
   commit's first hunk. Ranges with missing parent history report an error
   without fetching or presenting false root additions.
+- **`ctrl-n` edits a review note per file** in diff, PR, and worktree pickers
+  (#52), with a separate `✎` mark. Notes persist outside checkouts, survive
+  content changes, and clear when the editor saves an empty buffer.
+  **`preen notes` exports plain Markdown** in the review's file order; revision,
+  PR, and worktree targets have separate exports.
 
 ## [0.3.0]
 

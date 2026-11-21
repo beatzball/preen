@@ -6,7 +6,7 @@
 #     target                 NUL-framed repository, kind and comparison
 #     files/<path-hash>.path  original filename, NUL-terminated
 #     files/<path-hash>.viewed  hash of the reviewed raw per-file diff
-#     files/<path-hash>.note  reserved for plain-text review notes (#52)
+#     files/<path-hash>.note  plain-text review notes (independent of viewed content)
 # Target/path hashes use git hash-object --stdin (no -w, no object writes).
 # Comparison is working-tree or the literal REV, PR number, worktree path,
 # or immutable commit SHA (kind log);
@@ -868,7 +868,7 @@ edit_file() {
 
 # ---- persistent review progress ---------------------------------------------
 # Configure a target without creating anything: simply browsing is read-only,
-# including when the state home is unavailable. Only ctrl-v creates the store.
+# including when the state home is unavailable. Viewed marks and notes create it.
 review_target() {
   local kind="$1" comparison="$2" repo state_home target_hash
   repo="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
@@ -913,7 +913,7 @@ review_is_viewed() {
 }
 
 review_list() {
-  local file store key mark n=0 total=0
+  local file store key mark viewed note n=0 total=0
   store="$(cat "$PREEN_STATE/review-dir")"
   mkdir -p "$PREEN_STATE/paths" || return 1
   # Revalidate saved marks even for paths absent from the current file list.
@@ -930,12 +930,15 @@ review_list() {
     total=$((total + 1))
     key="$(printf '%s' "$file" | git hash-object --stdin)" || return 1
     printf '%s\0' "$file" > "$PREEN_STATE/paths/$key" || return 1
+    viewed=' '; note=' '
     if review_is_viewed "$file" "$store" "$key"; then
-      n=$((n + 1))
-      printf '%s%s\033[2m✓\033[0m%s%s\0' "$key" "$WT_SEP" "$WT_SEP" "$file"
-    else
-      printf '%s%s %s%s\0' "$key" "$WT_SEP" "$WT_SEP" "$file"
+      n=$((n + 1)); viewed=$'\033[2m✓\033[0m'
     fi
+    if [ -s "$store/files/$key.note" ]; then
+      review_store_safe "$store/files/$key.note" || return 1
+      note='✎'
+    fi
+    printf '%s%s%s%s%s%s\0' "$key" "$WT_SEP" "$viewed" "$note" "$WT_SEP" "$file"
   done < "$PREEN_STATE/files"
   printf '%s of %s viewed' "$n" "$total" > "$PREEN_STATE/viewed-count"
 }
@@ -948,6 +951,7 @@ review_file() {
   IFS= read -r -d '' file < "$PREEN_STATE/paths/$key" || die "missing review file path"
   case "$action" in
     viewed) review_toggle "$file" ;;
+    note) review_note "$file" "$key" ;;
     preview|show) exec "$SELF" "--$action" "$file" ;;
     edit)
       open="${PREEN_WT_DIR:+$PREEN_WT_DIR/}$file"
@@ -986,7 +990,7 @@ review_location() {
 }
 
 review_store_safe() {
-  local store="$1" repo reviewed physical ancestor
+  local store="$1" repo reviewed physical ancestor context checked=0
   IFS= read -r -d '' repo < "$PREEN_STATE/target" || return 1
   physical="$(review_location "$store")" || die "cannot resolve review state directory"
   reviewed="$(cat "$PREEN_STATE/dir")"
@@ -995,9 +999,90 @@ review_store_safe() {
     if [ "$ancestor" -ef "$repo" ] || { [ -n "$reviewed" ] && [ "$ancestor" -ef "$reviewed" ]; }; then
       die "review state must be outside the checkout; set XDG_STATE_HOME"
     fi
+    # The nearest existing directory establishes whether this destination is
+    # in another checkout, too. One git call suffices for all its ancestors.
+    if [ "$checked" = 0 ] && [ -d "$ancestor" ]; then
+      checked=1
+      context="$(git -C "$ancestor" rev-parse --is-inside-work-tree --is-inside-git-dir 2>/dev/null)"
+      case "$context" in *true*) die "review state must be outside the checkout; set XDG_STATE_HOME" ;; esac
+    fi
     [ "$ancestor" != / ] || break
     ancestor="${ancestor%/*}"; [ -n "$ancestor" ] || ancestor=/
   done
+}
+
+# Edit a private temporary buffer, never the checkout or the durable note.
+# Recheck destinations after the editor exits; it may have changed symlinks.
+review_note() {
+  local file="$1" key="$2" store buffer tmp command="${EDITOR:-vi}" rc
+  local editor=()
+  store="$(cat "$PREEN_STATE/review-dir")"
+  review_store_safe "$store/files/$key.note" || return 1
+  buffer="$(mktemp "$PREEN_STATE/note.XXXXXX")" || die "cannot create note buffer"
+  if [ -f "$store/files/$key.note" ]; then
+    cat "$store/files/$key.note" > "$buffer" || die "cannot read review note"
+  fi
+  if [ -x "$command" ]; then editor=("$command")
+  else IFS=$' \t' read -r -a editor <<< "$command"; fi
+  [ "${#editor[@]}" -gt 0 ] || editor=(vi)
+  "${editor[@]}" "$buffer"; rc=$?
+  if [ "$rc" != 0 ]; then rm -f "$buffer"; return "$rc"; fi
+  review_store_safe "$store/files/$key.note" || return 1
+  review_store_safe "$store/files/$key.path" || return 1
+  review_store_safe "$store/target" || return 1
+  # Replacing a symlink with mv is safe, but following one with a redirection
+  # is not. Refuse metadata links so every durable write stays in the store.
+  [ ! -L "$store/target" ] && [ ! -L "$store/files/$key.path" ] \
+    && [ ! -L "$buffer" ] || die "review state contains a symlink"
+  if [ -s "$buffer" ]; then
+    ( umask 077; mkdir -p "$store/files" ) || die "cannot create review state"
+    # Atomic replacements also avoid writing through existing hard links.
+    tmp="$(mktemp "$store/files/$key.XXXXXX")" || die "cannot create review target"
+    if ! cat "$PREEN_STATE/target" > "$tmp" || ! mv -f "$tmp" "$store/target"; then
+      rm -f "$tmp"; die "cannot write review target"
+    fi
+    tmp="$(mktemp "$store/files/$key.XXXXXX")" || die "cannot create review filename"
+    if ! printf '%s\0' "$file" > "$tmp" || ! mv -f "$tmp" "$store/files/$key.path"; then
+      rm -f "$tmp"; die "cannot write review filename"
+    fi
+    tmp="$(mktemp "$store/files/$key.XXXXXX")" || die "cannot create review note"
+    if ! cat "$buffer" > "$tmp" || ! mv -f "$tmp" "$store/files/$key.note"; then
+      rm -f "$tmp"; die "cannot save review note"
+    fi
+  else
+    rm -f "$store/files/$key.note" || die "cannot clear review note"
+  fi
+  rm -f "$buffer"
+}
+
+# Export current list order, followed by notes whose paths left the diff, in
+# byte order. Keep those notes: a fix should not silently erase review feedback.
+review_notes() {
+  local store file key path
+  store="$(cat "$PREEN_STATE/review-dir")"
+  [ -d "$store/files" ] || return 0
+  review_store_safe "$store" || return 1
+  mkdir "$PREEN_STATE/exported" || return 1
+  {
+    if [ "${#FILES[@]}" -gt 0 ]; then printf '%s\0' "${FILES[@]}"; fi
+    for path in "$store"/files/*.note; do
+      [ -s "$path" ] || continue
+      key="${path##*/}"; key="${key%.note}"
+      review_store_safe "$store/files/$key.path" || return 1
+      cat "$store/files/$key.path" || return 1
+    done | LC_ALL=C sort -z
+  } > "$PREEN_STATE/export-paths" || return 1
+  while IFS= read -r -d '' file; do
+    key="$(printf '%s' "$file" | git hash-object --stdin)" || return 1
+    [ ! -e "$PREEN_STATE/exported/$key" ] || continue
+    : > "$PREEN_STATE/exported/$key"
+    path="$store/files/$key.note"
+    [ -s "$path" ] || continue
+    review_store_safe "$path" || return 1
+    printf '## %s\n' "$file"
+    cat "$path" || return 1
+    printf '\n\n'
+  done < "$PREEN_STATE/export-paths"
 }
 
 review_toggle() {
@@ -1096,7 +1181,20 @@ case "${1:-}" in
 esac
 
 # ---- pick a mode -------------------------------------------------------------
-KIND=""; REV=""; PR=""; WATCH=0
+KIND=""; REV=""; PR=""; WATCH=0; NOTES=0; NOTES_WT=""
+if [ "${1:-}" = notes ]; then
+  NOTES=1; shift
+  case "${1:-}" in
+    ''|diff|pr) ;;
+    wt|worktrees)
+      shift
+      [ "$#" = 1 ] || die "usage: preen notes wt PATH"
+      NOTES_WT="$(cd -P "$1" 2>/dev/null && pwd)" || die "no such worktree"
+      set -- diff ;;
+    *) die "usage: preen notes [diff [REV] | pr [NUMBER] | wt PATH]" ;;
+  esac
+  [ "$#" != 0 ] || set -- diff
+fi
 case "${1:-}" in
   md)   KIND=md;   shift; TARGET="${1:-.}" ;;
   diff) KIND=diff; shift; REV="${1:-}" ;;
@@ -1122,6 +1220,8 @@ preen — markdown and diffs in the terminal
   preen pr [NUMBER]     browse the files in a GitHub PR (default: this branch)
   preen worktrees       pick a git worktree, then browse what it changed
   preen wt              short for the same
+  preen notes [diff [REV] | pr [NUMBER] | wt PATH]
+                        print saved review notes as plain Markdown
   preen FILE.md         render one file, paged, and quit
   ... | preen           render piped input and quit
   preen - < FILE        the same, said out loud
@@ -1172,6 +1272,8 @@ keys inside the picker
   enter    open files from a commit/worktree list, else the full render in a pager
   ctrl-v   mark or unmark viewed (diff, pr, log and worktree files)
            marks persist under XDG_STATE_HOME/preen; changed diffs clear them
+  ctrl-n   edit a file review note in $EDITOR; empty buffer clears it
+           notes persist with a separate ✎ mark; export with preen notes
   ctrl-e   open in $EDITOR at the first diff hunk (Markdown opens at the top)
            known editors get a line jump; unknown editors open plainly
   ctrl-/   hide or show the preview
@@ -1195,8 +1297,10 @@ if [ -z "$KIND" ]; then
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 && KIND=diff || { KIND=md; TARGET=.; }
 fi
 
-command -v fzf >/dev/null || die "fzf is not installed"
-need_glow
+if [ "$NOTES" = 0 ]; then
+  command -v fzf >/dev/null || die "fzf is not installed"
+  need_glow
+fi
 if [ "$WATCH" = 1 ]; then
   watch_supported || die "watch needs fzf 0.73 or newer (stable reload tracking); update fzf with your package manager or an upstream release"
 fi
@@ -1241,6 +1345,7 @@ run_picker() {
     preview_action='"$PREEN_SELF" --review-file preview {1}'
     edit_action='execute("$PREEN_SELF" --review-file edit {1})+reload-sync("$PREEN_SELF" --review-list)'
     review_binds=(--nth=2.. --tiebreak=index
+      --bind 'ctrl-n:execute("$PREEN_SELF" --review-file note {1})+reload-sync("$PREEN_SELF" --review-list)'
       --bind 'ctrl-v:reload-sync("$PREEN_SELF" --review-file viewed {1})'
       --bind 'load:transform-header("$PREEN_SELF" --review-header)')
   else
@@ -1254,6 +1359,7 @@ run_picker() {
     # printf alone would emit an action even when fzf expands {1} to empty.
     # Only a nonempty ID may cancel the waiter and start a viewed reload.
     watch_args=(--track --id-nth=1
+      --bind "ctrl-n:transform:selected_id={1}; if [ -n \"\$selected_id\" ]; then printf 'bg-cancel+execute(\"\$PREEN_SELF\" --review-file note %s)+reload-sync(\"\$PREEN_SELF\" --review-list)' \"\$selected_id\"; fi"
       --bind "ctrl-v:transform(selected_id={1}; if [ -n \"\$selected_id\" ]; then printf 'bg-cancel+reload-sync(\"\$PREEN_SELF\" --review-file viewed %s)' \"\$selected_id\"; fi)"
       --bind 'load:bg-cancel+transform-header("$PREEN_SELF" --watch-header)+refresh-preview+bg-transform("$PREEN_SELF" --watch-await)')
     HEADER="$(watch_header)"
@@ -1369,7 +1475,7 @@ wt_loop() {
     fi
     if [ "$(cat "$PREEN_STATE/kind")" = diff ]; then
       review_target wt "$dir" || die "cannot identify worktree review target"
-      HEADER="$HEADER"$'\nctrl-v viewed'
+      HEADER="$HEADER"$'\nctrl-v viewed · ctrl-n note'
       review_picker >/dev/null
     else
       run_picker >/dev/null
@@ -1449,7 +1555,7 @@ elif [ "$KIND" = md ]; then
 elif [ "$KIND" = pr ]; then
   # read-only: the PR is fetched over the API, never checked out, so the
   # working tree and the current branch are left exactly as they are
-  command -v delta >/dev/null || die "delta is not installed"
+  [ "$NOTES" = 1 ] || command -v delta >/dev/null || die "delta is not installed"
   command -v gh >/dev/null || die "gh is not installed; see https://cli.github.com"
   gh auth status >/dev/null 2>&1 || die "not logged in to GitHub; run: gh auth login"
   META="$(pr_meta "$PR" 2>&1)" \
@@ -1467,7 +1573,7 @@ elif [ "$KIND" = pr ]; then
   LABEL=" preen · pr #$PRNUM · $(printf '%s' "$PRTITLE" | cut -c1-60) "
   HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit · esc quit'
 else
-  command -v delta >/dev/null || die "delta is not installed"
+  [ "$NOTES" = 1 ] || command -v delta >/dev/null || die "delta is not installed"
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
   # Run from the repo root, not from wherever you happen to be standing.
   # "git diff --name-only" always prints repo-root-relative paths, but
@@ -1480,7 +1586,19 @@ else
     gitw "" diff --no-ext-diff --no-textconv --quiet "$REV" -- 2>/dev/null
     [ "$?" -le 1 ] || die "invalid diff revision: $REV"
   fi
-  collect_files < <(diff_files "$REV")
+  if [ -n "$NOTES_WT" ]; then
+    found=0
+    while IFS= read -r -d '' record; do
+      [ "$record" != "worktree $NOTES_WT" ] || found=1
+    done < <(wt_records)
+    [ "$found" = 1 ] || die "not a worktree of this repository"
+    REV="$(wt_base "$NOTES_WT" 2>/dev/null)"
+    printf '%s' "$REV" > "$PREEN_STATE/rev"
+    printf '%s' "$NOTES_WT" > "$PREEN_STATE/dir"
+    collect_files < <(wt_files "$NOTES_WT" "$REV")
+  else
+    collect_files < <(diff_files "$REV")
+  fi
   HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nctrl-s layout · enter open · ctrl-e edit hunk · esc quit'
 fi
 
@@ -1496,8 +1614,10 @@ if [ "$KIND" = diff ] || [ "$KIND" = pr ]; then
   if [ "$KIND" = pr ]; then comparison="$PRNUM"
   elif [ -n "$REV" ]; then comparison="rev:$REV"
   else comparison=working-tree; fi
-  review_target "$KIND" "$comparison" || die "cannot identify review target"
-  HEADER="$HEADER"$'\nctrl-v viewed'
+  if [ -n "$NOTES_WT" ]; then review_target wt "$NOTES_WT"
+  else review_target "$KIND" "$comparison"; fi || die "cannot identify review target"
+  if [ "$NOTES" = 1 ]; then review_notes; exit $?; fi
+  HEADER="$HEADER"$'\nctrl-v viewed · ctrl-n note'
   if [ "$WATCH" != 1 ] && [ ${#FILES[@]} -eq 0 ]; then
     : > "$PREEN_STATE/files"
     review_list >/dev/null

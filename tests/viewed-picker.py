@@ -81,7 +81,7 @@ try:
     key(b"\x16", 0.2)
     wait_for(lambda: not marks(), "second ctrl-v did not unmark same file")
     assert selected() == initial, "filtered selection moved after unmarking"
-    key(b"\x0e")
+    key(b"\x1b[B")
     second = selected()
     assert second != initial, "cursor did not move to another filtered row"
     key(b"\x16", 0.2)
