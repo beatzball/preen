@@ -54,6 +54,7 @@ test-log.sh preen-test+new_repo
 test-notes.sh preen-dep+source
 test-notes.sh preen-notes
 test-notes.sh preen-notes-shim
+test-notes.sh preen-test+new_repo
 test-pr.sh preen-dep+source
 test-pr.sh preen-gh
 test-pr.sh preen-list+preen_list
