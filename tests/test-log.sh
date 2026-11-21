@@ -195,6 +195,61 @@ import pathlib, sys
 assert len([r for r in pathlib.Path(sys.argv[1]).read_bytes().split(b'\0') if r]) == 50
 PY
 assert_true $? 'missing default branch falls back to last 50 commits'
+# A successfully inferred but empty range needs the same usable fallback.
+mkdir "$box/default"
+git init -q -b main "$box/default"
+printf 'inherited\n' > "$box/default/inherited.txt"
+printf '0\n' > "$box/default/changed.txt"
+tgit -C "$box/default" add .; tgit -C "$box/default" commit -qm root
+printf '1\n' > "$box/default/changed.txt"
+tgit -C "$box/default" commit -qam first
+printf '2\n' > "$box/default/changed.txt"
+tgit -C "$box/default" commit -qam second
+default_head="$(git -C "$box/default" rev-parse HEAD)"
+LOG_CWD="$box/default" LOG_SHA='' log_run
+assert_true $? 'bare log on main opens recent history'
+assert_eq "$(list_count "$box/capture/commits")" 3 'bare log on main includes all three recent commits'
+LOG_CWD="$box/default" log_run HEAD..HEAD
+assert_eq $? 1 'explicit empty range stays empty on main'
+tgit -C "$d" branch -m feature main
+LOG_SHA='' log_run
+assert_true $? 'bare log on main with long history opens'
+assert_eq "$(list_count "$box/capture/commits")" 50 'empty inferred range fallback is capped at 50 commits'
+tgit -C "$d" branch -m main feature
+
+# Raw commit headers distinguish a shallow boundary from a genuine root.
+git clone -q --depth=1 "file://$box/default" "$box/shallow"
+git -C "$box/shallow" cat-file commit HEAD | grep -q '^parent '
+assert_true $? 'shallow fixture has a real parent in its stored commit header'
+git -C "$box/shallow" rev-parse --verify -q HEAD^ >/dev/null 2>&1
+assert_eq $? 1 'shallow fixture cannot walk to its parent'
+shallow_before="$(snapshot "$box/shallow")"
+objects_before="$(git -C "$box/shallow" count-objects -v)"
+boundary_before="$(cat "$box/shallow/.git/shallow")"
+LOG_CWD="$box/shallow" LOG_SHA="$default_head" XDG_STATE_HOME="$box/shallow-state" log_run HEAD
+assert_eq $? 1 'missing parent history rejects the range'
+assert_contains "$(cat "$box/err")" 'missing first-parent history' 'shallow boundary gets a specific missing-history explanation'
+assert_contains "$(cat "$box/err")" "${default_head:0:12}" 'missing-history response identifies the affected commit'
+assert_contains "$(cat "$box/err")" 'preen does not fetch' 'missing-history response explains read-only behavior'
+[ ! -e "$box/capture/commits" ]; assert_true $? 'missing history never opens a picker with fabricated counts'
+[ ! -e "$box/shallow-state" ]; assert_true $? 'missing history creates no persistent review state'
+assert_eq "$(snapshot "$box/shallow")" "$shallow_before" 'missing-history response preserves checkout files and index'
+assert_eq "$(git -C "$box/shallow" count-objects -v)" "$objects_before" 'missing-history response downloads no objects'
+assert_eq "$(cat "$box/shallow/.git/shallow")" "$boundary_before" 'missing-history response preserves shallow boundary'
+# Callback errors must remain errors, including when creating viewed marks.
+mkdir "$box/shallow-callback"
+printf log > "$box/shallow-callback/kind"
+printf '%s' "$default_head" > "$box/shallow-callback/commit"
+printf inline > "$box/shallow-callback/mode"
+: > "$box/shallow-callback/dir"
+printf '%s\0log\0%s\0' "$box/shallow" "$default_head" > "$box/shallow-callback/target"
+printf '%s' "$box/shallow-state/preen/target" > "$box/shallow-callback/review-dir"
+(cd "$box/shallow" && PREEN_STATE="$box/shallow-callback" "$PREEN" --preview changed.txt > "$box/preview" 2> "$box/preview.err")
+assert_eq $? 1 'missing-parent file preview propagates failure'
+[ ! -s "$box/preview" ]; assert_true $? 'missing-parent file preview emits no root addition'
+(cd "$box/shallow" && PREEN_STATE="$box/shallow-callback" "$PREEN" --viewed changed.txt > "$box/mark" 2> "$box/mark.err")
+assert_eq $? 1 'missing-parent viewed hash propagates failure'
+[ ! -e "$box/shallow-state" ]; assert_true $? 'missing-parent diff cannot be saved as viewed'
 # The real picker tests level switches, empty selections and concurrent watch.
 python3 "$PREEN_ROOT/tests/log-pty.py" "$d" "$box/pty" "$commit" "$empty" "$odd"
 assert_true $? 'real fzf log levels handle filtering, empty commits, quit, viewed, edit and concurrent watch'

@@ -70,14 +70,21 @@ An empty commit opens an empty file picker; `esc` still returns to commits.
 
 `RANGE` accepts a Git revision or range. Without one, preen shows commits on
 the current branch since its merge-base with the default branch. It reads
-`origin/HEAD`, then tries `main`, then `master`. When no merge-base is available,
-it shows the last 50 commits. An empty range reports that there is nothing to
-show.
+`origin/HEAD`, then tries `main`, then `master`. When that inferred range is
+empty, or no merge-base is available, it shows the last 50 commits. Bare
+`preen log` therefore also browses recent history on the default branch.
+An explicitly supplied empty range reports that there is nothing to show.
 
 Each file compares the commit with its first parent. A root commit compares
 with the empty tree. Renames appear as a removal and an addition. Local edits,
 staged changes and untracked files stay outside these comparisons. Nothing is
 checked out, fetched or stashed.
+
+If a range includes a commit whose parent history is missing, such as the
+boundary of a shallow clone, preen reports the affected commit and stops before
+opening the picker. Choose a newer range with available parents, or obtain the
+missing history yourself before retrying. Only commits with no parent in their
+stored header compare with the empty tree; preen does not fetch history.
 
 The file picker supports the usual layout toggle, full render, viewed marks
 and editor jump. Viewed progress belongs to the full commit SHA, so opening the

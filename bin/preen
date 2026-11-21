@@ -279,27 +279,46 @@ render_diff() {
 # Hashing the empty tree does not write an object. Git can compare against it
 # even in a repository whose only commit is a root commit.
 commit_base() {
-  gitw "" rev-parse --verify -q "$1^" 2>/dev/null \
-    || git hash-object -t tree --stdin </dev/null
+  local sha="$1" parent
+  # Revision walking hides parents at shallow boundaries. The stored commit
+  # header still names them, so only a genuinely parentless commit is a root.
+  parent="$(gitw "" cat-file commit "$sha" | awk '
+    /^$/ { body = 1 }
+    !body && /^parent / && !parent { parent = $2 }
+    END { if (parent) print parent }
+  ')" || return 1
+  if [ -z "$parent" ]; then
+    git hash-object -t tree --stdin </dev/null
+  elif gitw "" cat-file -e "$parent^{tree}" 2>/dev/null; then
+    printf '%s\n' "$parent"
+  else
+    printf 'preen: missing first-parent history for commit %.12s; choose a newer range or obtain the missing history before retrying (preen does not fetch)\n' "$sha" >&2
+    return 1
+  fi
 }
 
 commit_files() {
+  local base
+  base="$(commit_base "$1")" || return 1
   gitw "" diff --no-ext-diff --no-textconv --no-renames --name-only -z \
-    "$(commit_base "$1")" "$1" --
+    "$base" "$1" --
 }
 
 commit_diff() {
-  local file="$1" color="${2:-always}" sha
+  local file="$1" color="${2:-always}" sha base
   sha="$(cat "$PREEN_STATE/commit")"
+  base="$(commit_base "$sha")" || return 1
   gitw "" --literal-pathspecs diff --no-ext-diff --no-textconv --no-renames \
-    --binary --color="$color" "$(commit_base "$sha")" "$sha" -- "$file"
+    --binary --color="$color" "$base" "$sha" -- "$file"
 }
 
 commit_list() {
   local sha file count subject date
   while IFS= read -r sha; do
+    # A process substitution would hide a failed diff behind a zero count.
+    commit_files "$sha" > "$PREEN_STATE/commit-files" || return 1
     count=0
-    while IFS= read -r -d '' file; do count=$((count + 1)); done < <(commit_files "$sha")
+    while IFS= read -r -d '' file; do count=$((count + 1)); done < "$PREEN_STATE/commit-files"
     # Metadata is display only. Strip controls, including the field delimiter
     # and terminal escapes; callbacks receive only the immutable hex SHA.
     subject="$(gitw "" show -s --format=%s "$sha" | LC_ALL=C tr '\000-\037\177' ' ')"
@@ -309,10 +328,11 @@ commit_list() {
 }
 
 render_commit() {
-  local sha="$1"
-  gitw "" show -s --color=always --format=fuller "$sha" --
+  local sha="$1" base
+  base="$(commit_base "$sha")" || return 1
+  gitw "" show -s --color=always --format=fuller "$sha" -- || return 1
   gitw "" diff --no-ext-diff --no-textconv --no-renames --color=always --stat \
-    "$(commit_base "$sha")" "$sha" --
+    "$base" "$sha" --
 }
 
 # the one delta invocation, shared by render_diff and the stdin path
@@ -1045,7 +1065,7 @@ case "${1:-}" in
         "$(cat "$PREEN_STATE/rev"  2>/dev/null || echo '')" \
         "$(cat "$PREEN_STATE/dir"  2>/dev/null || echo '')"
     fi
-    exit 0 ;;
+    exit $? ;;
   --show)
     f="$2"; term_width; w="$WIDTH"
     kind="$(cat "$PREEN_STATE/kind" 2>/dev/null || echo diff)"
@@ -1064,7 +1084,7 @@ case "${1:-}" in
         "$(cat "$PREEN_STATE/rev"  2>/dev/null || echo '')" \
         "$(cat "$PREEN_STATE/dir"  2>/dev/null || echo '')" | pager
     fi
-    exit 0 ;;
+    exit $? ;;
   --review-file) review_file "$2" "$3"; exit $? ;;
   --review-list) review_list; exit $? ;;
   --review-header) review_header; exit 0 ;;
@@ -1120,7 +1140,10 @@ checkout is ctrl-e, which opens your own copy of the file's path in $EDITOR.
 log lists commits with hash, subject, author date and file count; the preview
 shows the commit's stat. RANGE uses git revision syntax (for example main..HEAD).
 Without RANGE, it lists HEAD since its merge-base with the default branch,
-or the last 50 commits when no merge-base is available. Files compare with the
+or the last 50 commits when that range is empty or no merge-base is available.
+Explicit empty ranges stay empty. A range with missing parent history reports
+an error; obtain that history or choose a newer range. preen does not fetch.
+Files compare with the
 first parent, or the empty tree for a root commit. esc returns to commits;
 ctrl-c quits. No checkout, fetch or stash. ctrl-e opens your local copy at the
 commit's first diff hunk; local lines may differ. Viewed marks belong to the SHA.
@@ -1283,7 +1306,8 @@ log_loop() {
     case "$sha" in ''|*[!0-9a-f]*) die "invalid commit ID" ;; esac
     printf '%s' "$sha" > "$PREEN_STATE/commit"
     echo log > "$PREEN_STATE/kind"
-    collect_files < <(commit_files "$sha")
+    commit_files "$sha" > "$PREEN_STATE/commit-files" || die "cannot list commit files"
+    collect_files < "$PREEN_STATE/commit-files"
     review_target log "$sha" || die "cannot identify commit review target"
     LABEL=" preen · commit · ${sha:0:12} "; PROMPT='  file ❯ '
     HEADER=$'ctrl-d / ctrl-u scroll · pgdn / pgup page\nctrl-s layout · enter open · ctrl-e edit hunk\nctrl-v viewed · esc back · ctrl-c quit'
@@ -1358,17 +1382,24 @@ wt_loop() {
 LABEL=" preen · $KIND${REV:+ · $REV} "
 if [ "$KIND" = log ]; then
   command -v delta >/dev/null || die "delta is not installed"
+  # Missing objects in a partial clone must not trigger an implicit fetch.
+  export GIT_NO_LAZY_FETCH=1
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
   ROOT="$(git rev-parse --show-toplevel)" && cd "$ROOT" || die "cannot find repository root"
   if [ -n "$REV" ]; then
     gitw "" rev-list --end-of-options "$REV" -- > "$PREEN_STATE/commits" 2>/dev/null \
       || die "invalid log range: $REV"
-  elif BASE="$(wt_base "" 2>/dev/null)"; then
-    gitw "" rev-list "$BASE..HEAD" -- > "$PREEN_STATE/commits"
   else
-    gitw "" rev-list -n 50 HEAD -- > "$PREEN_STATE/commits" 2>/dev/null || :
+    : > "$PREEN_STATE/commits"
+    if BASE="$(wt_base "" 2>/dev/null)"; then
+      gitw "" rev-list "$BASE..HEAD" -- > "$PREEN_STATE/commits" || die "cannot read commit history"
+    fi
+    if [ ! -s "$PREEN_STATE/commits" ]; then
+      gitw "" rev-list -n 50 HEAD -- > "$PREEN_STATE/commits" 2>/dev/null || :
+    fi
   fi
-  collect_files < <(commit_list)
+  commit_list > "$PREEN_STATE/commit-rows" || exit 1
+  collect_files < "$PREEN_STATE/commit-rows"
   COMMITS=(${FILES[@]+"${FILES[@]}"})
   [ ${#COMMITS[@]} -gt 0 ] || die "nothing to show (log mode)"
   log_loop
