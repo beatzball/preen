@@ -87,6 +87,13 @@ notes_run "$d" none diff
 [ ! -d "$XDG_STATE_HOME" ]; assert_true $? 'browsing creates no note store'
 notes_export "$d" diff
 assert_eq "$(cat "$box/export")" '' 'export without notes is empty'
+notes_export "$d" diff HEAD
+assert_eq "$?" 0 'valid revision without notes exports successfully'
+notes_export "$d" diff this-revision-does-not-exist
+invalid_rc=$?
+[ "$invalid_rc" -ne 0 ]; assert_true $? 'invalid export revision fails'
+assert_contains "$(cat "$box/export-error")" 'invalid diff revision' 'invalid export revision explains the failure'
+assert_eq "$(cat "$box/export")" '' 'invalid export revision writes no Markdown'
 notes_run "$d" note diff
 assert_eq "$(cat "$box/rc")" 0 'actual ctrl-n binding saves a note'
 [ "$(cat "$box/rc")" = 0 ] || exit 1
@@ -186,6 +193,19 @@ ln -s "$other/new-state" "$XDG_STATE_HOME"
 notes_run "$d" note diff
 assert_eq "$(cat "$box/rc")" 1 'dangling symlink into another checkout is refused'
 [ ! -e "$other/new-state" ]; assert_true $? 'dangling state link creates no checkout files'
+# Command substitution must preserve newlines that belong to a symlink target.
+newline_repo="$box/checkout"$'\n\n'
+tgit clone -q "$other" "$newline_repo"
+ln -s "$newline_repo" "$box/newline-absolute"
+ln -s $'checkout\n\n' "$box/newline-relative"
+for link in "$box/newline-absolute" "$box/newline-relative"; do
+  export XDG_STATE_HOME="$link"
+  before="$(snapshot "$newline_repo")"
+  notes_run "$d" note diff
+  assert_eq "$(cat "$box/rc")" 1 'newline-ending symlink to checkout is refused'
+  [ ! -e "$newline_repo/preen" ]; assert_true $? 'newline-ending symlink creates no review store in checkout'
+  assert_eq "$(snapshot "$newline_repo")" "$before" 'newline-ending symlink leaves checkout untouched'
+done
 # A missing path component before .. must not hide a later checkout symlink.
 ln -s "$other" "$box/checkout-alias"
 export XDG_STATE_HOME="$box/missing/../checkout-alias/state"
@@ -204,5 +224,9 @@ assert_eq "$(cat "$box/app-rc")" 1 'note symlink into checkout is refused'
 assert_eq "$(snapshot "$other")" "$before" 'note symlink does not write checkout'
 rm "$store/files/$key.note"
 # A real PTY proves empty selection, filtering and watch/editor interleaving.
-python3 "$PREEN_ROOT/tests/notes-picker.py" "$other" "$box/real"
-assert_true $? 'real fzf note editing, empty selection, filtered reloads and watch races'
+if "$PREEN" --watch-check; then
+  python3 "$PREEN_ROOT/tests/notes-picker.py" "$other" "$box/real-watch" watch
+  assert_true $? 'real fzf watch notes, empty selection and editor reload races'
+fi
+python3 "$PREEN_ROOT/tests/notes-picker.py" "$other" "$box/real-diff" diff
+assert_true $? 'real fzf diff notes, no-match query and filtered save/clear reloads'

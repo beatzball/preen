@@ -12,7 +12,8 @@ import sys
 import termios
 import time
 
-repo, box = map(Path, sys.argv[1:])
+repo, box = map(Path, sys.argv[1:3])
+mode = sys.argv[3]
 box.mkdir(parents=True)
 editor = box / 'editor'
 editor.write_text('''#!/bin/sh
@@ -159,12 +160,11 @@ def run(mode):
                 os.waitpid(pid, 0)
 
 
-# The fixture is disposable; reset only that repository's tracked file.
+# Each mode gets its own box and prepares only its disposable repository.
 subprocess.run(['git', '-C', str(repo), 'checkout', '--', 'f.txt'], check=True)
-run('watch')
-for name in ('aaa.txt', 'bbb.txt', 'after-note.txt'):
+for name in ('aaa.txt', 'bbb.txt', 'after-note.txt', 'odd\x1fsep.txt'):
     (repo / name).unlink(missing_ok=True)
-(repo / 'aaa.txt').write_text('first\n')
-(box / 'entered').unlink(missing_ok=True)
-(box / 'text').write_text('PTY feedback.\n')
-run('diff')
+if mode == 'diff':
+    (repo / 'aaa.txt').write_text('first\n')
+    (repo / 'odd\x1fsep.txt').write_text('selected\n')
+run(mode)

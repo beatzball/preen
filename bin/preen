@@ -980,7 +980,11 @@ review_location() {
         path="${path%/}/$part"
         if [ -L "$path" ]; then
           hops=$((hops + 1)); [ "$hops" -le 40 ] || return 1
-          link="$(readlink "$path")" || return 1
+          # BSD and GNU readlink -n omit their output terminator. The sentinel
+          # keeps target newlines inside the substitution: trimming them would
+          # validate a different directory from the actual write path.
+          link="$(readlink -n "$path" && printf '.')" || return 1
+          link="${link%.}"
           case "$link" in /*) path=/ ;; *) path="${path%/*}"; [ -n "$path" ] || path=/ ;; esac
           rest="$link${rest:+/$rest}"
         fi ;;
@@ -1582,7 +1586,7 @@ else
   # the cwd, then previewed half of them as empty. Standing at the root makes
   # both halves agree, and matches what "git preen" already does.
   ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" && cd "$ROOT" || true
-  if [ "$WATCH" = 1 ] && [ -n "$REV" ]; then
+  if { [ "$WATCH" = 1 ] || [ "$NOTES" = 1 ]; } && [ -n "$REV" ]; then
     gitw "" diff --no-ext-diff --no-textconv --quiet "$REV" -- 2>/dev/null
     [ "$?" -le 1 ] || die "invalid diff revision: $REV"
   fi
