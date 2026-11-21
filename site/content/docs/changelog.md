@@ -15,6 +15,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`ctrl-y` sends saved worktree review notes through roost** (#54). Choose
+  a pane if several match the worktree, then review the exact Markdown and
+  confirm. When no pane is available, preen shows where the notes are saved.
+
 ## [0.5.0]
 
 ### Added

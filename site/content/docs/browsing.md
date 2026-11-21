@@ -152,6 +152,12 @@ starts with `## filename`, followed by the note's text. Export is plain text,
 without colors or a pager; an empty review prints nothing. PR export reads
 the current PR list over the network, just as the picker does.
 
+In a worktree's file picker, press `ctrl-y` to send all its saved notes
+through roost. When several panes report that worktree as their working
+directory, pick a pane by number. Read the Markdown and the target pane,
+then type `yes` to send. If roost or a matching pane is unavailable, preen
+shows the saved note paths and the export command.
+
 ## `preen watch` — follow changes as they happen
 
 ```sh
@@ -256,6 +262,7 @@ one common mistake silently breaks it.
 | `enter` | open files from a commit or worktree list; otherwise open the full render in a pager |
 | `ctrl-e` | open in `$EDITOR` at the first diff hunk (Markdown opens at the top) |
 | `ctrl-n` | edit the current file's review note; save an empty buffer to clear it |
+| `ctrl-y` | preview and confirm sending the worktree's saved notes through roost |
 | `ctrl-v` | mark or unmark the current diff, PR, commit, or worktree file as viewed |
 | `ctrl-l` | choose a relative Markdown link (md mode, fzf 0.45 or newer) |
 | `ctrl-d` / `ctrl-u` | scroll the preview 8 lines |
@@ -266,7 +273,7 @@ one common mistake silently breaks it.
 | `esc` | return from links, worktree files, or commit files, or quit |
 | `ctrl-c` | quit |
 
-`preen watch` keeps these keys while refreshing the list and preview.
+`preen watch` keeps the diff picker keys while refreshing the list and preview.
 
 Typing filters the list, as in any fzf picker. The arrow keys move the cursor
 and the list cycles at both ends.

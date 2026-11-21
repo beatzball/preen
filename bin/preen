@@ -1062,11 +1062,11 @@ review_note() {
 # Export current list order, followed by notes whose paths left the diff, in
 # byte order. Keep those notes: a fix should not silently erase review feedback.
 review_notes() {
-  local store file key path
+  local work="${1:-$PREEN_STATE}" store file key path
   store="$(cat "$PREEN_STATE/review-dir")"
   [ -d "$store/files" ] || return 0
   review_store_safe "$store" || return 1
-  mkdir "$PREEN_STATE/exported" || return 1
+  mkdir "$work/exported" || return 1
   {
     if [ "${#FILES[@]}" -gt 0 ]; then printf '%s\0' "${FILES[@]}"; fi
     for path in "$store"/files/*.note; do
@@ -1075,19 +1075,247 @@ review_notes() {
       review_store_safe "$store/files/$key.path" || return 1
       cat "$store/files/$key.path" || return 1
     done | LC_ALL=C sort -z
-  } > "$PREEN_STATE/export-paths" || return 1
+  } > "$work/export-paths" || return 1
   while IFS= read -r -d '' file; do
     key="$(printf '%s' "$file" | git hash-object --stdin)" || return 1
-    [ ! -e "$PREEN_STATE/exported/$key" ] || continue
-    : > "$PREEN_STATE/exported/$key"
+    [ ! -e "$work/exported/$key" ] || continue
+    : > "$work/exported/$key" || return 1
     path="$store/files/$key.note"
     [ -s "$path" ] || continue
     review_store_safe "$path" || return 1
+    if [ "$#" -gt 0 ]; then printf '%s\0' "$path" >> "$work/note-files" || return 1; fi
     printf '## %s\n' "$file"
     cat "$path" || return 1
     printf '\n\n'
-  done < "$PREEN_STATE/export-paths"
+  done < "$work/export-paths"
 }
+
+# Parse roost's status JSON with the system awk. Follow the document structure
+# so strings and nested fields cannot be mistaken for a pane or its cwd.
+# Use NUL framing for cwd, and keep the display label JSON-escaped.
+roost_review_status() {
+  "$1" status --json 2>/dev/null | LC_ALL=C awk '
+    { doc = doc $0 "\n" }
+    function next_token() {
+      sub(/^[[:space:]]+/, "", doc)
+      if (!match(doc, /^("[^"\\[:cntrl:]]*(\\(["\\\/bfnrt]|u[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F])[^"\\[:cntrl:]]*)*"|[][{}:,]|-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?|true|false|null)/)) {
+        if (doc != "") exit 1
+        token = ""
+        return
+      }
+      token = substr(doc, 1, RLENGTH)
+      doc = substr(doc, RLENGTH + 1)
+    }
+    function consume(expected) {
+      if (token != expected) exit 1
+      next_token()
+    }
+    function utf8(n) {
+      if (n < 128) return sprintf("%c", n)
+      if (n < 2048) return sprintf("%c%c", 192 + int(n/64), 128 + n%64)
+      if (n < 65536) return sprintf("%c%c%c", 224 + int(n/4096), 128 + int(n/64)%64, 128 + n%64)
+      return sprintf("%c%c%c%c", 240 + int(n/262144), 128 + int(n/4096)%64, 128 + int(n/64)%64, 128 + n%64)
+    }
+    function hex(s,    i, n) {
+      for (i = 1; i <= 4; i++) n = 16*n + index("0123456789abcdef", tolower(substr(s, i, 1))) - 1
+      return n
+    }
+    function directory(s,    out, esc, n, low) {
+      if (s !~ /^"/) return ""
+      s = substr(s, 2, length(s)-2)
+      while (match(s, /\\/)) {
+        out = out substr(s, 1, RSTART-1)
+        s = substr(s, RSTART+1)
+        esc = substr(s, 1, 1)
+        s = substr(s, 2)
+        if (esc in escapes) out = out escapes[esc]
+        else if (esc == "u") {
+          n = hex(substr(s, 1, 4))
+          s = substr(s, 5)
+          if (n >= 55296 && n <= 56319 && s ~ /^\\u/) {
+            low = hex(substr(s, 3, 4))
+            if (low < 56320 || low > 57343) return ""
+            n = 65536 + 1024*(n-55296) + low-56320
+            s = substr(s, 7)
+          }
+          if (n == 0 || (n >= 55296 && n <= 57343)) return ""
+          out = out utf8(n)
+        } else out = out esc
+      }
+      return out s
+    }
+    function pane(    cwd, address, label, name, agent) {
+      cwd = directory(fields["\"cwd\""])
+      # Roost replaces invalid UTF-8 with U+FFFD without a per-cwd flag.
+      if (cwd !~ /^\// || index(cwd, utf8(65533))) return
+      if (fields["\"id\""] !~ /^"%[0-9]+"$/ || fields["\"window_id\""] !~ /^"@[0-9]+"$/) return
+      address = ":" substr(fields["\"window_id\""], 2, length(fields["\"window_id\""])-2) "." \
+                      substr(fields["\"id\""], 2, length(fields["\"id\""])-2)
+      agent = fields["\"session_id\""]
+      # A window linked into two sessions can list the same pane twice.
+      if (address in directories) {
+        if (cwd != directories[address] || agent != agents[address]) exit 1
+        return
+      }
+      directories[address] = cwd
+      agents[address] = agent
+      name = fields["\"name\""]
+      if (name !~ /^"/) name = fields["\"window_name\""]
+      label = fields["\"session\""] ":" fields["\"window_index\""] "." fields["\"pane_index\""]
+      if (name ~ /^"/) label = label " " name
+      printf "%s%c%s%c%s%c%s%c", cwd, 0, address, 0, label, 0, agent, 0
+    }
+    function value(context,    key, field) {
+      if (token == "{") {
+        consume("{")
+        if (context == "pane") for (key in fields) delete fields[key]
+        if (token != "}") {
+          while (1) {
+            if (token !~ /^"/) exit 1
+            key = token
+            next_token()
+            consume(":")
+            field = token
+            if (context == "status") {
+              if (key in top) exit 1
+              top[key] = field
+            }
+            if (context == "pane") {
+              if (key in fields) exit 1
+              fields[key] = field
+            }
+            value(context == "status" && key == "\"panes\"" ? "panes" : "")
+            if (token != ",") break
+            consume(",")
+          }
+        }
+        consume("}")
+        if (context == "pane") pane()
+      } else if (token == "[") {
+        consume("[")
+        if (token != "]") {
+          while (1) {
+            value(context == "panes" ? "pane" : "")
+            if (token != ",") break
+            consume(",")
+          }
+        }
+        consume("]")
+      } else {
+        if (token == "" || token ~ /^[]}:,]$/) exit 1
+        next_token()
+      }
+    }
+    END {
+      escapes["b"] = "\b"; escapes["f"] = "\f"; escapes["n"] = "\n"
+      escapes["r"] = "\r"; escapes["t"] = "\t"
+      next_token()
+      if (token != "{") exit 1
+      value("status")
+      if (token != "" || top["\"schema\""] != "1" || top["\"command\""] != "\"status\"" || top["\"panes\""] != "[") exit 1
+      if (top["\"running\""] == "false") exit 2
+      if (top["\"running\""] != "true") exit 1
+    }'
+}
+
+worktree_review_send() (
+  local repo kind dir work roost payload cwd target name agent choice answer path
+  local i selected=0 matches=0 rc
+  local targets=() names=() agents=() FILES=()
+  # fzf supplies the file list on stdin and captures its own stdout.
+  # Prompts and decisions belong to the controlling terminal.
+  exec </dev/tty >/dev/tty 2>&1 || return 0
+  {
+    IFS= read -r -d '' repo &&
+    IFS= read -r -d '' kind &&
+    IFS= read -r -d '' dir
+  } < "$PREEN_STATE/target" || return 0
+  [ "$kind" = wt ] || return 0
+  work="$(mktemp -d "$PREEN_STATE/send.XXXXXX")" || return 0
+  trap 'rm -rf "$work"' EXIT
+
+  collect_files < "$PREEN_STATE/files"
+  if ! review_notes "$work" > "$work/notes"; then
+    printf 'Could not read saved review notes.\n'
+  elif [ ! -s "$work/notes" ]; then
+    printf 'No saved review notes for this worktree.\n'
+  elif ! LC_ALL=C tr -d '\000-\010\013-\037\177' < "$work/notes" | cmp -s "$work/notes" -; then
+    printf 'The notes contain terminal control bytes. Export them to review separately.\n'
+  elif ! roost="$(command -v roost)"; then
+    printf 'roost is not installed.\n'
+  else
+    # Keep roost in the original locale. Some tmux versions replace non-ASCII
+    # paths with underscores when queried in the C locale.
+    if roost_review_status "$roost" > "$work/status"; then
+      while IFS= read -r -d '' cwd && IFS= read -r -d '' target &&
+            IFS= read -r -d '' name && IFS= read -r -d '' agent; do
+        [ "$dir" -ef "$cwd" ] || continue
+        targets[matches]="$target"; names[matches]="$name"; agents[matches]="$agent"
+        matches=$((matches + 1))
+      done < "$work/status"
+      if [ "$matches" -gt 0 ]; then
+        if [ "$matches" -gt 1 ]; then
+          printf 'Choose a roost pane for this worktree:\n'
+          for ((i=0; i<matches; i++)); do
+            printf '  %d) %s (%s)\n' "$((i + 1))" "${names[i]}" "${targets[i]}"
+          done
+          printf 'Pane number (Enter cancels): '
+          IFS= read -r choice || return 0
+          for ((selected=0; selected<matches; selected++)); do
+            [ "$choice" != "$((selected + 1))" ] || break
+          done
+          [ "$selected" -lt "$matches" ] || return 0
+        fi
+
+        printf 'Review notes for %s (%s)\n\n' "${names[selected]}" "${targets[selected]}"
+        cat "$work/notes" || return 0
+        printf 'Send to %s? Type yes to send: ' "${targets[selected]}"
+        IFS= read -r answer && [ "$answer" = yes ] || return 0
+
+        # Recheck after the prompt. Qualify the live pane ID with its live
+        # window ID so roost never interprets it as an old bare %N alias.
+        if roost_review_status "$roost" > "$work/status"; then
+          while IFS= read -r -d '' cwd && IFS= read -r -d '' target &&
+                IFS= read -r -d '' name && IFS= read -r -d '' agent; do
+            [ "$target" = "${targets[selected]}" ] && [ "$agent" = "${agents[selected]}" ] &&
+              [ "$dir" -ef "$cwd" ] || continue
+            # read -d preserves the trailing newlines in the displayed export.
+            IFS= read -r -d '' payload < "$work/notes" || :
+            rc=0
+            "$roost" send "$target" "$payload" || rc=$?
+            case "$rc" in
+              0) printf 'Review notes sent to %s.\n' "$target" ;;
+              4) printf 'roost submitted the notes to %s without observing a new turn.\n' "$target" ;;
+              *) printf 'roost exited %d. Check pane %s for delivery.\n' "$rc" "$target" ;;
+            esac
+            printf 'Press Enter to return to the worktree. '
+            IFS= read -r answer || :
+            return 0
+          done < "$work/status"
+        fi
+        printf 'The selected roost pane changed or is unavailable.\n'
+      else
+        printf 'No roost pane is on this worktree.\n'
+      fi
+    else
+      rc=$?
+      if [ "$rc" = 2 ]; then
+        printf 'roost is not running.\n'
+      else
+        printf 'Could not read roost status.\n'
+      fi
+    fi
+  fi
+  if [ -s "$work/note-files" ]; then
+    printf 'Saved review note files\n'
+    while IFS= read -r -d '' path; do
+      printf '  %q\n' "$path"
+    done < "$work/note-files"
+    printf 'Export them with preen notes wt %q\n' "$dir"
+  fi
+  printf 'Press Enter to return to the worktree. '
+  IFS= read -r answer || :
+)
 
 review_toggle() {
   local file="$1" store key hash tmp
@@ -1119,7 +1347,7 @@ review_picker() {
   WITH_NTH='2..'; PICK='{1}'
   ENTER='execute("$PREEN_SELF" --review-file show {1})'
   VIEWED=true
-  run_picker
+  run_picker "$@"
   VIEWED=false
 }
 
@@ -1365,6 +1593,7 @@ case "${1:-}" in
   --review-file) review_file "$2" "$3"; exit $? ;;
   --review-list) review_list; exit $? ;;
   --review-header) review_header; exit 0 ;;
+  --review-send) worktree_review_send; exit 0 ;;
   --viewed) review_toggle "$2"; exit 0 ;;
   --toggle)
     m="$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)"
@@ -1467,6 +1696,7 @@ keys inside the picker
            marks persist under XDG_STATE_HOME/preen; changed diffs clear them
   ctrl-n   edit a file review note in $EDITOR; empty buffer clears it
            notes persist with a separate ✎ mark; export with preen notes
+  ctrl-y   review and confirm sending saved notes to a roost pane (worktree files)
   ctrl-e   open in $EDITOR at the first diff hunk (Markdown opens at the top)
            known editors get a line jump; unknown editors open plainly
   ctrl-l   choose a relative Markdown link in md mode (fzf 0.45 or newer)
@@ -1531,7 +1761,7 @@ WITH_NTH='..'; PICK='{}'; EDIT='{}'; ENTER=""; VIEWED=false
 # openable. The ${FILES[@]+...} guard is for bash 3.2, which treats an empty
 # array as unset under set -u.
 run_picker() {
-  local watch_args=() review_binds=() md_args=()
+  local watch_args=() review_binds=() md_args=() send_binds=()
   local edit_action="execute(\"\$PREEN_SELF\" --edit $PICK $EDIT)" preview_action="\"\$PREEN_SELF\" --preview $PICK"
   case "$(cat "$PREEN_STATE/kind")" in
     log-list) edit_action=ignore ;;
@@ -1569,7 +1799,11 @@ run_picker() {
       --bind 'load:bg-cancel+transform-header("$PREEN_SELF" --watch-header)+refresh-preview+bg-transform("$PREEN_SELF" --watch-await)')
     HEADER="$(watch_header)"
   fi
-  fzf ${review_binds[@]+"${review_binds[@]}"} ${watch_args[@]+"${watch_args[@]}"} ${md_args[@]+"${md_args[@]}"} \
+  if [ "${1:-}" = --worktree-send ]; then
+    send_binds=(--bind 'ctrl-y:execute("$PREEN_SELF" --review-send)')
+  fi
+  fzf ${review_binds[@]+"${review_binds[@]}"} ${watch_args[@]+"${watch_args[@]}"} \
+    ${md_args[@]+"${md_args[@]}"} ${send_binds[@]+"${send_binds[@]}"} \
     --read0 \
     --ansi --no-multi --cycle \
     --layout=reverse \
@@ -1676,14 +1910,14 @@ wt_loop() {
       echo none > "$PREEN_STATE/kind"
       FILES=("$branch has changed nothing against its merge-base")
       EDIT='{}'; ENTER='ignore'
-      HEADER='esc  back to the worktree list'
+      HEADER=$'ctrl-y send notes\nesc back to the worktree list'
     fi
     if [ "$(cat "$PREEN_STATE/kind")" = diff ]; then
       review_target wt "$dir" || die "cannot identify worktree review target"
-      HEADER="$HEADER"$'\nctrl-v viewed · ctrl-n note'
-      review_picker >/dev/null
+      HEADER="$HEADER"$'\nctrl-v viewed · ctrl-n note · ctrl-y send notes'
+      review_picker --worktree-send >/dev/null
     else
-      run_picker >/dev/null
+      run_picker --worktree-send >/dev/null
     fi
     [ -f "$PREEN_STATE/quit" ] && return 0
   done
