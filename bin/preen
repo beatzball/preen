@@ -1123,6 +1123,14 @@ review_picker() {
   VIEWED=false
 }
 
+md_links_supported() {
+  local version major minor
+  version="$(fzf --version </dev/null 2>/dev/null)" || return 1
+  major="${version%%.*}"; minor="${version#*.}"; minor="${minor%%.*}"
+  case "$major:$minor" in *[!0-9:]*|:*|*:) return 1 ;; esac
+  [ "$major" -gt 0 ] || [ "$minor" -ge 45 ]
+}
+
 # Glow already parses Markdown, including reference links and links in tables.
 # A private style marks link destinations with a record separator. Read the
 # original URL from the accompanying OSC 8 sequence, before Glow rewrites it
@@ -1142,10 +1150,42 @@ md_link_urls() {
     }'
 }
 
-# Remove the URL query/fragment before decoding so an escaped # or ? can still
-# be part of the filename. Keep the decoded bytes in a variable (even newlines).
+# The OSC destination retains Markdown escapes. Render it as plain Markdown
+# text, encoding literal punctuation and backslash escapes as references.
+# The two x characters keep whitespace intact at the edges of Glow's output.
+md_link_unescape() {
+  printf '%s\n' "$1" |
+    LC_ALL=C awk 'BEGIN {
+      for (i = 33; i <= 126; i++) ascii[sprintf("%c", i)] = i
+    } {
+      printf "x"
+      while (length($0)) {
+        if (match($0, /^&([a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#[xX][0-9a-fA-F]+);/)) {
+          printf "%s", substr($0, 1, RLENGTH)
+          $0 = substr($0, RLENGTH + 1)
+          continue
+        }
+        n = $0 ~ /^\\[[:punct:]]/ ? 2 : 1
+        c = substr($0, n, 1)
+        if (c ~ /[[:punct:]]/) printf "&#%d;", ascii[c]
+        else printf "%s", c
+        $0 = substr($0, n + 1)
+      }
+      print "x"
+    }' | glow -s "$PREEN_STATE/md-links.json" -w 0 - 2>/dev/null
+}
+
+# Interpret the Markdown, then split the URL into its components. Decode
+# percent escapes last so an encoded # or ? can be part of the filename.
 md_link_path() {
-  local rest="${1%%[#?]*}" hex byte
+  local rest="$1" unescaped hex byte
+  case "$rest" in
+    *'&'*|*'\'*)
+      unescaped="$(md_link_unescape "$rest")" || return 1
+      case "$unescaped" in x*x) rest="${unescaped#x}"; rest="${rest%x}" ;; *) return 1 ;; esac
+      ;;
+  esac
+  rest="${rest%%[#?]*}"
   case "$rest" in ''|/*) return 1 ;; esac
   case "${rest%%/*}" in *:*) return 1 ;; esac
   MD_LINK_PATH=""
@@ -1200,7 +1240,7 @@ md_pick_link() {
     printf 'empty\n' > "$action"
     return
   fi
-  chosen="$(fzf --no-multi --no-ansi --no-expect --no-print-query --no-read0 --no-print0 \
+  chosen="$(FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' fzf \
     --layout=reverse --border=rounded --prompt='  link ❯ ' \
     --header='enter follow · esc back · ctrl-c quit' \
     --bind 'enter:accept-non-empty' \
@@ -1218,7 +1258,10 @@ md_pick_link() {
       printf '%s\n' "$pos" > "$action"
       return
     fi
-  done < "$PREEN_STATE/decorated"
+  # An empty filter exposes the main picker's unfiltered order and skips its
+  # header rows. Keep the user's --tac and --header-lines in effect here too.
+  done < <(fzf --filter='' --sync --read0 --print0 --no-print-query --no-expect \
+    --no-ansi --with-nth='..' < "$PREEN_STATE/decorated")
   printf 'outside\n' > "$action"
 }
 
@@ -1414,9 +1457,9 @@ keys inside the picker
            notes persist with a separate ✎ mark; export with preen notes
   ctrl-e   open in $EDITOR at the first diff hunk (Markdown opens at the top)
            known editors get a line jump; unknown editors open plainly
-  ctrl-l   choose a relative Markdown link in md mode
+  ctrl-l   choose a relative Markdown link in md mode (fzf 0.45 or newer)
   ctrl-/   hide or show the preview
-  esc      quit, or in worktrees/log mode go back one level
+  esc      go back from links, worktree files, or commit files, or quit
   ctrl-c   quit
 H
     exit 0 ;;
@@ -1481,9 +1524,12 @@ run_picker() {
   case "$(cat "$PREEN_STATE/kind")" in
     log-list) edit_action=ignore ;;
     md)
-      md_args=(--sync --no-tac
-        --bind 'ctrl-l:execute("$PREEN_SELF" --md-links {})+transform("$PREEN_SELF" --md-link-action pick)'
-        --bind 'load:transform("$PREEN_SELF" --md-link-action load)')
+      if md_links_supported; then
+        HEADER="$HEADER"$'\nctrl-l links'
+        md_args=(--sync
+          --bind 'ctrl-l:execute("$PREEN_SELF" --md-links {})+transform("$PREEN_SELF" --md-link-action pick)'
+          --bind 'load:transform("$PREEN_SELF" --md-link-action load)')
+      fi
       ;;
   esac
   if [ "$VIEWED" = true ]; then
@@ -1709,7 +1755,7 @@ elif [ "$KIND" = md ]; then
     esac
     i=$((i + 1))
   done
-  HEADER=$'ctrl-d / ctrl-u scroll · pgdn / pgup page\nenter render · ctrl-e edit · ctrl-l links\nctrl-/ hide · esc quit'
+  HEADER=$'ctrl-d / ctrl-u  scroll · pgdn / pgup  page\nenter render · ctrl-e edit · ctrl-/ hide · esc quit'
 elif [ "$KIND" = pr ]; then
   # read-only: the PR is fetched over the API, never checked out, so the
   # working tree and the current branch are left exactly as they are
