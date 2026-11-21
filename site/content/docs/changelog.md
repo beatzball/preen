@@ -15,6 +15,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`preen log [RANGE]` browses commit history** (#56). Pick a commit to see
+  its files and diffs against its first parent, or the empty tree for a root
+  commit. The default range starts at the merge-base with the default branch,
+  falling back to the last 50 commits. Viewed marks persist per commit, and
+  `ctrl-e` opens your local file at the commit's first hunk.
+
 ## [0.3.0]
 
 ### Added

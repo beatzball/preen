@@ -8,7 +8,8 @@
 #     files/<path-hash>.viewed  hash of the reviewed raw per-file diff
 #     files/<path-hash>.note  reserved for plain-text review notes (#52)
 # Target/path hashes use git hash-object --stdin (no -w, no object writes).
-# Comparison is working-tree or the literal REV, PR number, or worktree path;
+# Comparison is working-tree or the literal REV, PR number, worktree path,
+# or immutable commit SHA (kind log);
 # changing the base commit under the same REV invalidates marks by diff hash.
 # PREEN_STATE is separate, temporary callback state, removed on exit.
 set -uo pipefail
@@ -272,6 +273,46 @@ file_diff() {
 
 render_diff() {
   file_diff "$2" "$4" "${5:-}" | delta_pipe "$3" "$1"
+}
+
+# ---- commit history ---------------------------------------------------------
+# Hashing the empty tree does not write an object. Git can compare against it
+# even in a repository whose only commit is a root commit.
+commit_base() {
+  gitw "" rev-parse --verify -q "$1^" 2>/dev/null \
+    || git hash-object -t tree --stdin </dev/null
+}
+
+commit_files() {
+  gitw "" diff --no-ext-diff --no-textconv --no-renames --name-only -z \
+    "$(commit_base "$1")" "$1" --
+}
+
+commit_diff() {
+  local file="$1" color="${2:-always}" sha
+  sha="$(cat "$PREEN_STATE/commit")"
+  gitw "" --literal-pathspecs diff --no-ext-diff --no-textconv --no-renames \
+    --binary --color="$color" "$(commit_base "$sha")" "$sha" -- "$file"
+}
+
+commit_list() {
+  local sha file count subject date
+  while IFS= read -r sha; do
+    count=0
+    while IFS= read -r -d '' file; do count=$((count + 1)); done < <(commit_files "$sha")
+    # Metadata is display only. Strip controls, including the field delimiter
+    # and terminal escapes; callbacks receive only the immutable hex SHA.
+    subject="$(gitw "" show -s --format=%s "$sha" | LC_ALL=C tr '\000-\037\177' ' ')"
+    date="$(gitw "" show -s --format=%as "$sha")"
+    printf '%s%s%.12s  %s  %s files  %s\0' "$sha" "$WT_SEP" "$sha" "$date" "$count" "$subject"
+  done < "$PREEN_STATE/commits"
+}
+
+render_commit() {
+  local sha="$1"
+  gitw "" show -s --color=always --format=fuller "$sha" --
+  gitw "" diff --no-ext-diff --no-textconv --no-renames --color=always --stat \
+    "$(commit_base "$sha")" "$sha" --
 }
 
 # the one delta invocation, shared by render_diff and the stdin path
@@ -782,6 +823,8 @@ edit_file() {
       vi|vim|nvim|nano|emacs|emacsclient|micro|hx|helix|code|code-insiders|zed)
         if [ "$kind" = pr ]; then
           line="$(pr_slice "$file" "$PREEN_STATE/pr.diff" | first_hunk_line)"
+        elif [ "$kind" = log ]; then
+          line="$(commit_diff "$file" never | first_hunk_line)"
         elif [ "$kind" = diff ]; then
           dir="$(cat "$PREEN_STATE/dir" 2>/dev/null || echo '')"
           rev="$(cat "$PREEN_STATE/rev" 2>/dev/null || echo '')"
@@ -821,6 +864,10 @@ review_diff() {
   kind="$(cat "$PREEN_STATE/kind")"
   if [ "$kind" = pr ]; then
     pr_slice "$file" "$PREEN_STATE/pr.diff"
+    return
+  fi
+  if [ "$kind" = log ]; then
+    commit_diff "$file" never
     return
   fi
   dir="$(cat "$PREEN_STATE/dir")"; rev="$(cat "$PREEN_STATE/rev")"
@@ -983,6 +1030,10 @@ case "${1:-}" in
       render_md "$w" "$f"
     elif [ "$kind" = wt ]; then
       render_wt "$w" "$f" "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)"
+    elif [ "$kind" = log-list ]; then
+      render_commit "$f"
+    elif [ "$kind" = log ]; then
+      commit_diff "$f" | delta_pipe "$(cat "$PREEN_STATE/mode")" "$w"
     elif [ "$kind" = none ]; then
       printf '%s\n' "$f"
     elif [ "$kind" = pr ]; then
@@ -1002,6 +1053,8 @@ case "${1:-}" in
       render_md "$w" "$f" | pager
     elif [ "$kind" = wt ]; then
       render_wt "$w" "$f" "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" | pager
+    elif [ "$kind" = log ]; then
+      commit_diff "$f" | delta_pipe "$(cat "$PREEN_STATE/mode")" "$w" | pager
     elif [ "$kind" = pr ]; then
       render_pr "$w" "$f" \
         "$(cat "$PREEN_STATE/mode" 2>/dev/null || echo sbs)" "$PREEN_STATE/pr.diff" | pager
@@ -1028,6 +1081,7 @@ case "${1:-}" in
   md)   KIND=md;   shift; TARGET="${1:-.}" ;;
   diff) KIND=diff; shift; REV="${1:-}" ;;
   watch) KIND=diff; WATCH=1; shift; REV="${1:-}" ;;
+  log) KIND=log; shift; REV="${1:-}"; [ "$#" -le 1 ] || die "usage: preen log [RANGE]" ;;
   pr)   KIND=pr;   shift; PR="${1:-}" ;;
   worktrees|wt) KIND=wt; shift ;;
   --version|-V|version)
@@ -1044,6 +1098,7 @@ preen — markdown and diffs in the terminal
   preen md [DIR]        browse markdown files under DIR (default .)
   preen diff [REV]      browse files changed vs REV (default: working tree)
   preen watch [REV]     keep local diffs live (fzf 0.73 or newer)
+  preen log [RANGE]     pick a commit, then browse its files
   preen pr [NUMBER]     browse the files in a GitHub PR (default: this branch)
   preen worktrees       pick a git worktree, then browse what it changed
   preen wt              short for the same
@@ -1061,6 +1116,14 @@ upstream release. PR and worktree lists are not watched.
 pr mode needs the gh CLI. It reads the PR diff over the network and shows it,
 with no checkout, no fetch and no stash. The one key that reaches your
 checkout is ctrl-e, which opens your own copy of the file's path in $EDITOR.
+
+log lists commits with hash, subject, author date and file count; the preview
+shows the commit's stat. RANGE uses git revision syntax (for example main..HEAD).
+Without RANGE, it lists HEAD since its merge-base with the default branch,
+or the last 50 commits when no merge-base is available. Files compare with the
+first parent, or the empty tree for a root commit. esc returns to commits;
+ctrl-c quits. No checkout, fetch or stash. ctrl-e opens your local copy at the
+commit's first diff hunk; local lines may differ. Viewed marks belong to the SHA.
 
 worktrees mode lists every worktree except the main checkout, with its branch
 and how many files it changed against the merge-base with the default branch
@@ -1080,16 +1143,16 @@ keys inside the picker
   pgdn / pgup                scroll the preview half a page
   shift-down / shift-up      scroll the preview one line
   home / end                 jump the preview to top or bottom
-  ctrl-s   toggle side-by-side <-> inline (diff, pr and worktrees modes)
+  ctrl-s   toggle side-by-side <-> inline (diff, pr, log and worktrees files)
            start in inline with PREEN_LAYOUT=inline, or by default with
            git config preen.layout inline (add --global for every repo)
-  enter    open the full render in a pager
-  ctrl-v   mark or unmark viewed (diff, pr and worktree files)
+  enter    open files from a commit/worktree list, else the full render in a pager
+  ctrl-v   mark or unmark viewed (diff, pr, log and worktree files)
            marks persist under XDG_STATE_HOME/preen; changed diffs clear them
   ctrl-e   open in $EDITOR at the first diff hunk (Markdown opens at the top)
            known editors get a line jump; unknown editors open plainly
   ctrl-/   hide or show the preview
-  esc      quit, or in worktrees mode go back one level
+  esc      quit, or in worktrees/log mode go back one level
   ctrl-c   quit
 H
     exit 0 ;;
@@ -1148,6 +1211,7 @@ WITH_NTH='..'; PICK='{}'; EDIT='{}'; ENTER=""; VIEWED=false
 # array as unset under set -u.
 run_picker() {
   local watch_args=() review_binds=() edit_action="execute(\"\$PREEN_SELF\" --edit $PICK $EDIT)" preview_action="\"\$PREEN_SELF\" --preview $PICK"
+  [ "$(cat "$PREEN_STATE/kind")" != log-list ] || edit_action=ignore
   if [ "$VIEWED" = true ]; then
     review_list > "$PREEN_STATE/decorated"
     HEADER="$(review_header)"
@@ -1189,7 +1253,7 @@ run_picker() {
     --bind "ctrl-s:execute-silent(\"\$PREEN_SELF\" --toggle)+refresh-preview" \
     --bind "enter:$ENTER" \
     --bind "ctrl-e:$edit_action" \
-    --bind "ctrl-c:execute-silent(touch '$PREEN_STATE/quit')+abort" \
+    --bind 'ctrl-c:execute-silent(touch "$PREEN_STATE/quit")+abort' \
     --bind 'ctrl-/:toggle-preview' \
     --bind 'ctrl-d:preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down' \
     --bind 'ctrl-u:preview-up+preview-up+preview-up+preview-up+preview-up+preview-up+preview-up+preview-up' \
@@ -1199,6 +1263,33 @@ run_picker() {
     --bind 'shift-up:preview-up' \
     --bind 'home:preview-top' \
     --bind 'end:preview-bottom' < "$PREEN_STATE/decorated"
+}
+
+# Each level has its own fzf process. All callbacks finish before shared state
+# switches to another commit; a filtered-out selection cannot trigger a switch.
+log_loop() {
+  local sel sha
+  while :; do
+    echo log-list > "$PREEN_STATE/kind"
+    FILES=(${COMMITS[@]+"${COMMITS[@]}"})
+    WITH_NTH='2..'; PICK='{1}'; EDIT='{1}'
+    ENTER='transform(commit_id={1}; if [ -n "$commit_id" ]; then printf accept; fi)'
+    LABEL=' preen · log '; PROMPT='  commit ❯ '
+    HEADER=$'ctrl-d / ctrl-u scroll · pgdn / pgup page\nenter files · esc quit · ctrl-c quit'
+    sel="$(run_picker)"
+    [ -n "$sel" ] || return 0
+    [ ! -f "$PREEN_STATE/quit" ] || return 0
+    sha="${sel%%"$WT_SEP"*}"
+    case "$sha" in ''|*[!0-9a-f]*) die "invalid commit ID" ;; esac
+    printf '%s' "$sha" > "$PREEN_STATE/commit"
+    echo log > "$PREEN_STATE/kind"
+    collect_files < <(commit_files "$sha")
+    review_target log "$sha" || die "cannot identify commit review target"
+    LABEL=" preen · commit · ${sha:0:12} "; PROMPT='  file ❯ '
+    HEADER=$'ctrl-d / ctrl-u scroll · pgdn / pgup page\nctrl-s layout · enter open · ctrl-e edit hunk\nctrl-v viewed · esc back · ctrl-c quit'
+    review_picker >/dev/null
+    [ ! -f "$PREEN_STATE/quit" ] || return 0
+  done
 }
 
 # ---- worktrees: pick a worktree, then browse its diff -------------------------
@@ -1265,7 +1356,24 @@ wt_loop() {
 
 # ---- build the file list -----------------------------------------------------
 LABEL=" preen · $KIND${REV:+ · $REV} "
-if [ "$KIND" = wt ]; then
+if [ "$KIND" = log ]; then
+  command -v delta >/dev/null || die "delta is not installed"
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
+  ROOT="$(git rev-parse --show-toplevel)" && cd "$ROOT" || die "cannot find repository root"
+  if [ -n "$REV" ]; then
+    gitw "" rev-list --end-of-options "$REV" -- > "$PREEN_STATE/commits" 2>/dev/null \
+      || die "invalid log range: $REV"
+  elif BASE="$(wt_base "" 2>/dev/null)"; then
+    gitw "" rev-list "$BASE..HEAD" -- > "$PREEN_STATE/commits"
+  else
+    gitw "" rev-list -n 50 HEAD -- > "$PREEN_STATE/commits" 2>/dev/null || :
+  fi
+  collect_files < <(commit_list)
+  COMMITS=(${FILES[@]+"${FILES[@]}"})
+  [ ${#COMMITS[@]} -gt 0 ] || die "nothing to show (log mode)"
+  log_loop
+  exit 0
+elif [ "$KIND" = wt ]; then
   command -v delta >/dev/null || die "delta is not installed"
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
   collect_files < <(wt_list)

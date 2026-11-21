@@ -12,6 +12,7 @@ preen                 # auto: diffs in a git repo, else markdown
 preen md [DIR]        # browse markdown files under DIR (default .)
 preen diff [REV]      # browse files changed vs REV (default: working tree)
 preen watch [REV]     # keep local diffs live (fzf 0.73 or newer)
+preen log [RANGE]     # pick a commit, then browse its files
 preen FILE.md         # render one file, paged, and quit
 ... | preen           # render piped input and quit
 preen - < FILE        # the same, said out loud
@@ -52,15 +53,48 @@ falls back to the index.
 
 With a **revision**, the list is exactly `git diff --name-only REV`.
 
+## `preen log` — browse commits
+
+```sh
+preen log
+preen log main..HEAD
+preen log HEAD~5..HEAD
+preen log HEAD^!       # only the latest commit
+```
+
+The first picker lists each commit's short hash, author date, file count and
+subject. Its preview shows the commit details and stat. Press `enter` to browse
+that commit's files, then `esc` to return to commits. At the commit list, `esc`
+quits; `ctrl-c` quits from either level, as in [Worktrees](/docs/worktrees).
+An empty commit opens an empty file picker; `esc` still returns to commits.
+
+`RANGE` accepts a Git revision or range. Without one, preen shows commits on
+the current branch since its merge-base with the default branch. It reads
+`origin/HEAD`, then tries `main`, then `master`. When no merge-base is available,
+it shows the last 50 commits. An empty range reports that there is nothing to
+show.
+
+Each file compares the commit with its first parent. A root commit compares
+with the empty tree. Renames appear as a removal and an addition. Local edits,
+staged changes and untracked files stay outside these comparisons. Nothing is
+checked out, fetched or stashed.
+
+The file picker supports the usual layout toggle, full render, viewed marks
+and editor jump. Viewed progress belongs to the full commit SHA, so opening the
+same commit through another range preserves it. `ctrl-e` opens your checkout's
+copy of the path at the first hunk from the commit; your local lines may differ,
+and a missing file opens plainly. The commit list uses `enter` to open files
+and has no editor or viewed action.
+
 ## Viewed files
 
-Press `ctrl-v` in a diff, PR, or worktree file picker to mark the current file
+Press `ctrl-v` in a diff, PR, commit, or worktree file picker to mark the current file
 as viewed. A dim `✓` appears beside it, and the header counts `12 of 40 viewed`.
 Press `ctrl-v` again to unmark it.
 
 Marks survive quitting and reopening the same review. Each repository and
 comparison has separate progress: the working tree, an explicit revision, a
-PR number, or a worktree path. A mark records the file's diff content; when
+PR number, commit SHA, or a worktree path. A mark records the file's diff content; when
 that diff changes, the next list refresh clears the mark. Reopening the picker
 or returning from the editor refreshes the list. Markdown mode has no viewed
 marks.
@@ -160,7 +194,7 @@ git config --global preen.layout inline
 Or for one run only: `PREEN_LAYOUT=inline preen diff`. See
 [Theming](/docs/theming#starting-in-inline) for which one wins.
 
-The toggle works in `diff`, `pr` and `worktrees` modes. Markdown has one
+The toggle works in `diff`, `pr`, `log` files and `worktrees` modes. Markdown has one
 layout, so `ctrl-s` does nothing in `md` mode.
 
 How the toggle is wired — two named delta features — is explained in
@@ -171,16 +205,16 @@ one common mistake silently breaks it.
 
 | key | action |
 |---|---|
-| `ctrl-s` | toggle side-by-side / inline (diff, pr and worktrees modes) |
-| `enter` | open the full render in a pager |
+| `ctrl-s` | toggle side-by-side / inline (diff, pr, log and worktree files) |
+| `enter` | open files from a commit or worktree list; otherwise open the full render in a pager |
 | `ctrl-e` | open in `$EDITOR` at the first diff hunk (Markdown opens at the top) |
-| `ctrl-v` | mark or unmark the current diff, PR, or worktree file as viewed |
+| `ctrl-v` | mark or unmark the current diff, PR, commit, or worktree file as viewed |
 | `ctrl-d` / `ctrl-u` | scroll the preview 8 lines |
 | `pgdn` / `pgup` | scroll the preview half a page |
 | `shift-down` / `shift-up` | scroll the preview one line |
 | `home` / `end` | jump the preview to the top or bottom |
 | `ctrl-/` | hide or show the preview |
-| `esc` | quit, or in worktrees mode go back one level |
+| `esc` | quit, or in worktrees/log mode go back one level |
 | `ctrl-c` | quit |
 
 `preen watch` keeps these keys while refreshing the list and preview.
@@ -193,7 +227,8 @@ and the list cycles at both ends.
 `ctrl-e` opens at the new-side start of the first diff hunk, including its
 context lines. New files start at line 1. It uses the same comparison as the
 preview: staged and unstaged changes together, a supplied revision, a
-worktree's merge-base, or the cached PR diff.
+worktree's merge-base, a commit's first parent (empty tree for a root), or the
+cached PR diff.
 
 vi, vim, nvim, nano, emacs, emacsclient, micro and Helix (`hx` or `helix`)
 receive `+LINE FILE`. VS Code (`code` or `code-insiders`) receives

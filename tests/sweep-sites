@@ -48,6 +48,9 @@ test-layout.sh preen-layout-home
 test-layout.sh preen-layout-out
 test-layout.sh preen-layout-shim
 test-layout.sh preen-test+new_repo
+test-log.sh preen-dep+source
+test-log.sh preen-log
+test-log.sh preen-test+new_repo
 test-pr.sh preen-dep+source
 test-pr.sh preen-gh
 test-pr.sh preen-list+preen_list
