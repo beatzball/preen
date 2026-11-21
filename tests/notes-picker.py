@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import pty
 import select
+import shutil
 import signal
 import struct
 import subprocess
@@ -25,9 +26,21 @@ cat "$NOTE_PTY/text" > "$1"
 ''')
 editor.chmod(0o755)
 (box / 'text').write_text('PTY feedback.\n')
+# Append the observer after production bindings so load:+ preserves the real
+# load actions and signals their completion rather than an editor side effect.
+real_fzf = shutil.which('fzf')
+assert real_fzf, 'fzf is not installed'
+observer = box / 'fzf'
+observer.write_text('''#!/bin/bash
+exec -a fzf "$NOTE_PTY_REAL_FZF" "$@" \
+  --bind 'load:+execute-silent(printf . >> "$NOTE_PTY/loads")' \
+  --bind 'ctrl-g:execute-silent(printf "%s\\000%s\\000" {1} {q} > "$NOTE_PTY/selected.next"; mv "$NOTE_PTY/selected.next" "$NOTE_PTY/selected")'
+''')
+observer.chmod(0o755)
 env = dict(os.environ, TERM='xterm-256color', SHELL='/bin/bash',
            XDG_STATE_HOME=str(box / 'state'), EDITOR=str(editor), NOTE_PTY=str(box),
-           FZF_DEFAULT_OPTS='--bind \'ctrl-g:execute-silent(printf "%s" {1} > "$NOTE_PTY/selected")\'')
+           NOTE_PTY_REAL_FZF=real_fzf, PATH=str(box) + ':' + os.environ['PATH'],
+           FZF_DEFAULT_OPTS='', FZF_DEFAULT_OPTS_FILE='')
 
 
 def run(mode):
@@ -65,12 +78,22 @@ def run(mode):
             pump(0.1)
         raise AssertionError(reason)
 
+    def loads():
+        path = box / 'loads'
+        return len(path.read_bytes()) if path.exists() else 0
+
+    def wait_loaded(before, reason):
+        wait(lambda: loads() > before, reason)
+
     def selected():
         path = box / 'selected'
         path.unlink(missing_ok=True)
         key(b'\x07')
         wait(path.exists, 'selection callback did not run')
-        return path.read_bytes()
+        snapshot = path.read_bytes().split(b'\0')
+        assert len(snapshot) == 3 and snapshot[2] == b'', 'incomplete selection snapshot'
+        assert snapshot[1] == b'odd', 'selection callback observed wrong query: ' + repr(snapshot[1])
+        return snapshot[0]
 
     def notes():
         return list((box / 'state').rglob('*.note'))
@@ -86,6 +109,7 @@ def run(mode):
     try:
         expected = b'0 of 0 viewed' if mode == 'watch' else b'0 of 2 viewed'
         wait(lambda: expected in output, 'initial picker did not render')
+        wait_loaded(0, 'initial fzf load did not complete')
         if mode == 'watch':
             wait(lambda: len(waiters()) == 1, 'watch waiter did not start')
             original_waiter = waiters()
@@ -93,9 +117,11 @@ def run(mode):
             key(b'\x0e')
             assert not (box / 'entered').exists(), 'empty picker launched editor'
             assert waiters() == original_waiter, 'empty note action replaced or canceled waiter'
+            before_membership = loads()
             (repo / 'aaa.txt').write_text('new first file\n')
             (repo / 'odd\x1fsep.txt').write_text('new selected file\n')
             wait(lambda: b'0 of 2 viewed' in output, 'empty note action stopped watch polling')
+            wait_loaded(before_membership, 'first watch membership load did not complete')
         key(b'NO_MATCH_QUERY')
         key(b'\x0e')
         assert not (box / 'entered').exists(), 'no-match note launched editor'
@@ -104,6 +130,7 @@ def run(mode):
         assert initial, 'filtered selection empty'
         if mode == 'watch':
             (box / 'hold').touch()
+        before_save = loads()
         key(b'\x0e')
         wait(lambda: (box / 'entered').exists(), 'note editor did not open')
         if mode == 'watch':
@@ -114,24 +141,34 @@ def run(mode):
             (repo / 'odd\x1fsep.txt').write_text('changed while editing\n')
             (box / 'release').touch()
         wait(lambda: len(notes()) == 1, 'note did not save')
+        wait_loaded(before_save, 'save-note fzf reload did not complete')
         wait(lambda: '✎'.encode() in output, 'note marker did not render')
         assert selected() == initial, 'filtered selection changed after note reload'
         assert notes()[0].with_suffix('.path').read_bytes() == b'odd\x1fsep.txt\0', 'ID lost separator filename'
         assert notes()[0].read_text() == 'PTY feedback.\n', 'saved note bytes changed'
         if mode == 'watch':
             # Export sees live membership; watcher must also keep following changes.
+            before_membership = loads()
             (repo / 'after-note.txt').write_text('poller still runs\n')
             start = len(output)
             wait(lambda: b'0 of 3 viewed' in output[start:], 'watch did not resume after note reload')
+            wait_loaded(before_membership, 'watch membership reload did not complete')
             wait(lambda: len(waiters()) == 1, 'note reload left extra or missing watch waiters')
         (box / 'entered').unlink()
         (box / 'text').write_text('')
+        before_clear = loads()
         key(b'\x0e')
         wait(lambda: not notes(), 'empty buffer did not clear note')
+        wait_loaded(before_clear, 'clear-note fzf reload did not complete')
         assert (box / 'before').read_text() == 'PTY feedback.\n', 'editor did not receive saved note'
         assert selected() == initial, 'clearing note changed filtered selection'
         key(b'\x03')
     except BaseException:
+        captures = {}
+        for name in ('selected', 'loads', 'before', 'editor-buffer'):
+            path = box / name
+            captures[name] = repr(path.read_bytes()[:512]) if path.exists() else 'missing'
+        sys.stderr.write('Note picker diagnostics: mode=' + mode + ' captures=' + repr(captures) + '\n')
         sys.stderr.write('Terminal tail: ' + repr(bytes(output[-1800:])) + '\n')
         raise
     finally:
