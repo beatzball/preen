@@ -20,6 +20,15 @@ Thin glue over three tools that already do the hard part:
 
 ## Install
 
+On macOS with Homebrew:
+
+```sh
+brew install beatzball/tap/preen
+```
+
+See [Getting Started](https://preening.dev/docs/getting-started) for optional
+theme and Git setup. For a checkout-based install:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/beatzball/preen/main/install.sh | bash
 ```
@@ -66,8 +75,13 @@ plain delta setup rather than this theme. It never removes packages.
 
 ### Updating
 
-preen runs straight from its git checkout: the `preen` on your `PATH` is a link
-into it. Updating is pulling that checkout:
+Homebrew installs tagged releases. Update with:
+
+```sh
+brew upgrade beatzball/tap/preen
+```
+
+For a checkout-based install, update the checkout that `preen` links to:
 
 ```sh
 git -C ~/.local/share/preen pull --ff-only

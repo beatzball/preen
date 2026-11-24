@@ -45,6 +45,26 @@ came out gray. The installer upgrades anything older.
 
 ## Install
 
+### Homebrew
+
+```sh
+brew install beatzball/tap/preen
+```
+
+Homebrew installs a tagged release with `glow`, `git-delta` and `fzf`. To use
+preen's glow theme, copy the packaged style into your glow config directory:
+
+```sh
+mkdir -p ~/.config/glow
+cp "$(brew --prefix preen)/share/preen/glow-roost.json" ~/.config/glow/roost.json
+```
+
+For the delta theme, layout toggle, `git preen` alias or difftool, add the
+settings you want from [Git integration](/docs/git-integration) to
+`~/.gitconfig`.
+
+### Installer
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/beatzball/preen/main/install.sh | bash
 ```
@@ -93,8 +113,13 @@ needed for that fallback path.**
 
 ### Updating
 
-preen runs straight from its git checkout: the `preen` on your `PATH` is a link
-into it. Updating is pulling that checkout:
+Homebrew upgrades preen to the latest release in the tap:
+
+```sh
+brew upgrade beatzball/tap/preen
+```
+
+For an install from `install.sh`, pull the checkout that `preen` links to:
 
 ```sh
 git -C ~/.local/share/preen pull --ff-only
@@ -111,6 +136,11 @@ for a default install — which can be ahead of the latest release.
 changed since.
 
 ### Uninstalling
+
+For a Homebrew install, run `brew uninstall beatzball/tap/preen`. If you added
+a theme or Git settings separately, remove those settings separately.
+
+For an install from `install.sh`:
 
 ```sh
 ./install.sh --uninstall

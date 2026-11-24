@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Run from the preen checkout with a tap remote and a new scratch directory.
+set -euo pipefail
+export LC_ALL=C GIT_TERMINAL_PROMPT=0
+# Only the push needs the tap credential and its prompt handler.
+export -n TAP_TOKEN GIT_ASKPASS
+
+die() { printf 'preen-update-tap: %s\n' "$1" >&2; exit 1; }
+
+[ "$#" -eq 2 ] || die 'usage: preen-update-tap TAP_REMOTE SCRATCH_DIR'
+remote="$1"
+scratch="$2"
+version="$(scripts/preen-release-gate version)"
+tag="v$version"
+release="$(gh release view "$tag" --repo beatzball/preen \
+  --json tagName,isDraft,isPrerelease,publishedAt)"
+jq -e --arg tag "$tag" '
+  .tagName == $tag and .isDraft == false and .isPrerelease == false
+  and (.publishedAt | strings | length > 0)
+' <<< "$release" >/dev/null || die "$tag is not a published stable release"
+
+mkdir "$scratch"
+archive="$scratch/preen.tar.gz"
+url="https://github.com/beatzball/preen/archive/refs/tags/$tag.tar.gz"
+curl -fsSL --retry 3 -o "$archive" "$url"
+archive_version="$(tar -xOf "$archive" "preen-$version/VERSION")"
+[ "$archive_version" = "$version" ] || die "source archive VERSION does not match $tag"
+sha256="$(shasum -a 256 < "$archive")"
+sha256="${sha256%% *}"
+
+tap="$scratch/tap"
+formula=Formula/preen.rb
+git init --quiet "$tap"
+git -C "$tap" remote add origin "$remote"
+previous_base=''
+for attempt in 1 2 3; do
+  git -C "$tap" fetch --quiet --depth 1 origin refs/heads/main
+  base="$(git -C "$tap" rev-parse FETCH_HEAD)"
+  [ "$base" != "$previous_base" ] || die 'push failed and tap main did not advance'
+  git -C "$tap" checkout --quiet --detach "$base"
+
+  # Work on bytes so the rest of the formula stays identical. Match only the
+  # existing stable URL and its adjacent checksum, even if a bottle is added.
+  python3 - "$tap/$formula" "$version" "$sha256" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+formula = Path(sys.argv[1])
+version, sha256 = (arg.encode("ascii") for arg in sys.argv[2:])
+if not formula.is_file() or formula.is_symlink() or formula.parent.is_symlink():
+    sys.exit("preen-update-tap: expected a regular Formula/preen.rb")
+source = formula.read_bytes()
+fields = list(re.finditer(
+    rb'^  url "https://github\.com/beatzball/preen/archive/refs/tags/v([0-9]+\.[0-9]+\.[0-9]+)\.tar\.gz"\r?\n'
+    rb'  sha256 "([0-9a-f]{64})"(?=\r?$)', source, re.MULTILINE,
+))
+if len(fields) != 1:
+    sys.exit("preen-update-tap: expected one stable URL and checksum in Formula/preen.rb")
+match = fields[0]
+installed, checksum = match.groups()
+current = tuple(map(int, installed.split(b".")))
+requested = tuple(map(int, version.split(b".")))
+if current > requested:
+    print(f"Tap already has newer preen {installed.decode('ascii')}.")
+elif current == requested:
+    if (installed, checksum) != (version, sha256):
+        sys.exit("preen-update-tap: formula for this release disagrees with the published archive")
+    print(f"Tap already has preen {version.decode('ascii')}.")
+else:
+    formula.write_bytes(source[:match.start(1)] + version + source[match.end(1):match.start(2)]
+                        + sha256 + source[match.end(2):])
+PY
+
+  if git -C "$tap" diff --quiet -- "$formula"; then
+    exit 0
+  fi
+  git -C "$tap" -c user.name='github-actions[bot]' \
+    -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+    commit -m "preen $version" -- "$formula"
+  # A normal push protects concurrent commits to main. Re-read the formula
+  # after a race before proposing another commit, including its version.
+  printf 'Pushing preen %s (attempt %s of 3).\n' "$version" "$attempt"
+  if TAP_TOKEN="${TAP_TOKEN-}" GIT_ASKPASS="${GIT_ASKPASS-}" git -C "$tap" \
+    -c credential.helper= -c credential.username=x-access-token -c http.followRedirects=false \
+    push origin HEAD:refs/heads/main; then
+    printf 'Tap updated to preen %s.\n' "$version"
+    exit 0
+  fi
+  previous_base="$base"
+done
+die 'tap main changed during three push attempts'

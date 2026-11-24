@@ -9,10 +9,9 @@ on: [push, pull_request]
 #
 # `contents: read` is the default, and one job overrides it: `tag`, which
 # pushes a tag and creates a release, and says `contents: write` in its own
-# block rather than widening this one. None of the others writes anything
-# back to GitHub: the ones that check out only read, `deploy` reaches Coolify
-# over a webhook with its own separate secret, and `verify-prod` only makes
-# HTTP requests to the live site.
+# block rather than widening this one. The `tap` job writes to the Homebrew
+# tap with its own secret, and `deploy` reaches Coolify over a webhook with
+# a separate secret.
 #
 # This narrows more than it looks. The repository default is already `read`,
 # so the block reads like a restatement -- but naming ANY scope here sets
@@ -119,7 +118,7 @@ jobs:
       - name: Parse the shell
         run: |
           rc=0
-          for f in bin/preen install.sh site/sync-assets.sh; do
+          for f in bin/preen install.sh site/sync-assets.sh scripts/preen-update-tap; do
             if bash -n "$f"; then echo "ok  $f"; else rc=1; fi
           done
           for f in scripts/verify-site.sh scripts/check-prod-drift.sh; do
@@ -284,8 +283,8 @@ jobs:
   # `smoke-image`: those test the docs site, which a release of the script
   # does not ship.
   #
-  # The one job that writes, so the one job with its own `permissions:`
-  # block. The top-level block stays read-only for everything else.
+  # Only this job needs a write-capable workflow token. The top-level
+  # permissions stay read-only for everything else.
   #
   # This job cannot run before merge -- only a push to main reaches it -- so
   # its first real test is the merge that lands it. Watch that run.
@@ -373,6 +372,34 @@ jobs:
           # is the annotated tag this job made, or nothing.
           gh release create "v$v" --verify-tag --title "v$v" --notes-file "$notes"
           echo "Tagged and released v$v."
+
+  # Also run when the tag job finds an existing release, so a rerun can
+  # finish a tap update that failed after publication.
+  tap:
+    if: github.repository == 'beatzball/preen' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [tag]
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: { persist-credentials: false }
+      - name: Update preen in the Homebrew tap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          [ -n "$TAP_TOKEN" ] || { echo '::error::TAP_TOKEN is required to update the Homebrew tap.'; exit 1; }
+          askpass="$RUNNER_TEMP/preen-tap-askpass"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            "Password for 'https://x-access-token@github.com':"*) printf '%s\n' "$TAP_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          GIT_ASKPASS="$askpass" scripts/preen-update-tap \
+            https://github.com/beatzball/homebrew-tap.git "$RUNNER_TEMP/preen-tap"
 
   # The build is the real check on the site: it fails on a duplicate slug, a
   # missing frontmatter title or a broken component, and it prerenders every
