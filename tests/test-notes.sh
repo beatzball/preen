@@ -174,18 +174,21 @@ notes_export "$d" pr 43
 assert_eq "$(cat "$box/export")" '' 'PR numbers have distinct notes'
 assert_eq "$(snapshot "$d")" "$before" 'PR note editing and export leave checkout untouched'
 # The worktree target is distinct from diff within that same checkout.
-tgit -C "$d" worktree add -qb review "$box/wt" HEAD
-printf 'worktree change\n' >> "$box/wt/f.txt"
-before="$(snapshot "$box/wt")"
+wt="$box/"$'wt é "q"\\tail🪶'
+tgit -C "$d" worktree add -qb review "$wt" HEAD
+printf 'worktree change\n' >> "$wt/f.txt"
+before="$(snapshot "$wt")"
 export NOTE_TEXT='Worktree feedback.'
 notes_run "$d" note wt
 notes_run "$d" none wt
 notes_marked initial; assert_true $? 'worktree note survives reopening'
-notes_export "$d" wt "$box/wt"
+notes_export "$d" wt "$wt"
 assert_eq "$(cat "$box/export")" $'## f.txt\nWorktree feedback.' 'worktree target exports without opening picker'
-notes_export "$box/wt" diff
+notes_export "$wt" diff
 assert_eq "$(cat "$box/export")" '' 'local diff and worktree notes are separate'
-assert_eq "$(snapshot "$box/wt")" "$before" 'worktree remains untouched'
+python3 "$PREEN_ROOT/tests/notes-send-picker.py" "$d" "$wt" "$box/send" "$(cat "$box/store")"
+assert_true $? 'real worktree picker sends confirmed notes with fake roost and handles unavailable targets'
+assert_eq "$(snapshot "$wt")" "$before" 'worktree remains untouched'
 # Commit-file notes use the immutable SHA target, independent of dirty files.
 tgit clone -q "$other" "$box/log-repo"
 printf 'committed first\n' >> "$box/log-repo/f.txt"
@@ -228,7 +231,7 @@ notes_export "$box/shallow-log" log HEAD
 assert_eq "$?" 1 'commit note export rejects missing parent history'
 assert_contains "$(cat "$box/export-error")" 'missing first-parent history' 'commit note export preserves shallow-history safety'
 # Refuse stores inside any checkout, even another repository or symlink target.
-for location in "$d/state" "$other/state" "$other/.git/state" "$box/wt/state"; do
+for location in "$d/state" "$other/state" "$other/.git/state" "$wt/state"; do
   export XDG_STATE_HOME="$location"
   notes_run "$d" note diff
   assert_eq "$(cat "$box/rc")" 1 'state home in a checkout is refused'

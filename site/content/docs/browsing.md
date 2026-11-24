@@ -152,6 +152,20 @@ starts with `## filename`, followed by the note's text. Export is plain text,
 without colors or a pager; an empty review prints nothing. PR export reads
 the current PR list over the network, just as the picker does.
 
+In a worktree's file picker, press `ctrl-y` to send all its saved notes
+through roost 0.13.0 or newer. Choose a pane if several agents match.
+Preen shows the target and the exact outgoing line before asking you to
+type `yes`. The line asks the agent to decode a JSON string containing
+the full Markdown, including line breaks.
+
+Guarded delivery requires a dedicated agent pane. Launch the agent directly
+or have its launcher `exec` it so it owns the pane's foreground process.
+The agent needs updated roost wiring to report its identity. If roost can't
+guard the target, or the notes contain invalid UTF-8, contain terminal
+control bytes beyond tabs and line feeds, or exceed 64 KiB once encoded,
+preen shows the saved note paths and the export command. If delivery is
+uncertain, check the pane before sending manually.
+
 ## `preen watch` — follow changes as they happen
 
 ```sh
@@ -256,6 +270,7 @@ one common mistake silently breaks it.
 | `enter` | open files from a commit or worktree list; otherwise open the full render in a pager |
 | `ctrl-e` | open in `$EDITOR` at the first diff hunk (Markdown opens at the top) |
 | `ctrl-n` | edit the current file's review note; save an empty buffer to clear it |
+| `ctrl-y` | preview and confirm sending the worktree's saved notes through roost |
 | `ctrl-v` | mark or unmark the current diff, PR, commit, or worktree file as viewed |
 | `ctrl-l` | choose a relative Markdown link (md mode, fzf 0.45 or newer) |
 | `ctrl-d` / `ctrl-u` | scroll the preview 8 lines |
@@ -266,7 +281,7 @@ one common mistake silently breaks it.
 | `esc` | return from links, worktree files, or commit files, or quit |
 | `ctrl-c` | quit |
 
-`preen watch` keeps these keys while refreshing the list and preview.
+`preen watch` keeps the diff picker keys while refreshing the list and preview.
 
 Typing filters the list, as in any fzf picker. The arrow keys move the cursor
 and the list cycles at both ends.

@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`ctrl-y` sends saved worktree review notes through roost** (#54). Choose
+  a matching agent pane, review the one-line payload, and confirm. Sending
+  requires roost 0.13.0 or newer and uses its agent guard. Preen shows the
+  saved note paths when guarded delivery is unavailable.
+
 ## [0.5.0]
 
 ### Added
