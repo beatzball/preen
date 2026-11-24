@@ -80,12 +80,15 @@ backup with an already-modified file.
 [difftool]
     prompt = false
 [difftool "preen"]
-    cmd = diff -u "$LOCAL" "$REMOTE" | preen -
+    cmd = diff -u \"$LOCAL\" \"$REMOTE\" | preen -
 ```
 
 Those first two are worth reading twice: **they change `git diff` and
 `git add -p` for every repository on the machine**, not just when you run
 preen. They are also the two `--uninstall` deliberately keeps — see below.
+
+Keep the backslashes before the quotes in `cmd` so Git passes the quotes to the
+shell. This preserves filenames with whitespace or glob characters.
 
 ### The delta theme
 
