@@ -43,7 +43,8 @@ jobs:
   # somewhere the two platforms can disagree, and macOS is where preen is most
   # often run, so a green Linux job on its own says less than it looks.
   shell:
-    timeout-minutes: 10
+    # The 746-assertion suite can approach ten minutes on hosted macOS.
+    timeout-minutes: 20
     runs-on: ${{ matrix.os }}
     strategy:
       # Not fail-fast: when a change breaks one platform, the interesting
