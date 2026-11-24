@@ -24,14 +24,25 @@ roost.write_text(f'''#!{sys.executable}
 import json, os, sys
 from pathlib import Path
 box = Path(os.environ["SEND_BOX"])
+args = sys.argv[1:]
 with (box / "calls").open("a") as log:
-    print(json.dumps(sys.argv[1:]), file=log)
-if sys.argv[1:] == ["status", "--json"]:
-    recheck = box / "recheck.json"
-    snapshot = recheck if recheck.exists() and len((box / "calls").read_text().splitlines()) == 2 else box / "status.json"
-    sys.stdout.buffer.write(snapshot.read_bytes())
+    print(json.dumps(args), file=log)
+if args == ["--version"]:
+    print((box / "version").read_text())
     sys.exit()
-assert sys.argv[1] == "send" and len(sys.argv) == 4, sys.argv[1:]
+if args == ["status", "--json"]:
+    count = sum(json.loads(line) == args for line in (box / "calls").read_text().splitlines())
+    snapshot = box / ("status-%d.json" % count)
+    sys.stdout.buffer.write((snapshot if snapshot.exists() else box / "status.json").read_bytes())
+    sys.exit()
+if len(args) == 3 and args[:2] == ["send", "--agent-token"]:
+    seed = (box / "token-seed").read_text()
+    if seed == "refuse":
+        print("agent guard refused the pane or its alias", file=sys.stderr)
+        sys.exit(7)
+    print(seed + args[2] if seed else "")
+    sys.exit()
+assert len(args) == 5 and args[:2] == ["send", "--agent-only"], args
 sys.exit(int((box / "send-exit").read_text()))
 ''')
 roost.chmod(0o755)
@@ -50,6 +61,27 @@ note = next((store / 'files').glob('*.note'))
 saved_note_name = b'/files/' + os.fsencode(note.name)
 original_note = note.read_bytes()
 expected = subprocess.check_output(['/bin/bash', preen, 'notes', 'wt', worktree], cwd=repo, env=env)
+instruction = 'Review these worktree notes. Decode the following JSON string as Markdown: '
+version_call = ['--version']
+status_call = ['status', '--json']
+
+
+def payload(markdown):
+    return instruction + json.dumps(markdown.decode(), ensure_ascii=True)
+
+
+def ready(target):
+    return [version_call, status_call, ['send', '--agent-token', target], status_call]
+
+
+def assert_delivery(target, markdown=expected):
+    assert calls()[:-1] == ready(target) + [status_call, version_call], calls()
+    call = calls()[-1]
+    assert call[:4] == ['send', '--agent-only', 'token-for-' + target, target], call[:4]
+    line = call[4]
+    assert all(32 <= ord(char) <= 126 for char in line), line
+    assert line == payload(markdown), line
+    assert json.loads(line[len(instruction):]).encode() == markdown
 
 
 class Picker:
@@ -147,11 +179,13 @@ def pane(pane_id, cwd, label, index):
                 harness='codex', command='codex', state='idle')
 
 
-def case(*panes, running=True, send_exit=0):
-    for name in ('calls', 'loads', 'recheck.json'):
+def case(*panes, running=True, send_exit=0, version='0.13.0', token='token-for-'):
+    for name in ('calls', 'loads', 'status-2.json', 'status-3.json'):
         (box / name).unlink(missing_ok=True)
     status(*panes, running=running)
     (box / 'send-exit').write_text(str(send_exit))
+    (box / 'version').write_text(version)
+    (box / 'token-seed').write_text(token)
 
 
 alias = box / 'worktree-alias'
@@ -167,6 +201,9 @@ query = b'NO_MATCH_QUERY'
 # The send is worktree-wide even while no file matches. Choosing the second
 # split sends once and with the unchanged snapshot, even on roost exit 4.
 case(unrelated, first, second, dict(second, session='linked window'), send_exit=4)
+complex_note = 'Check a tab\t, "quotes", \\path, café, 🪶, \u0085 and \u2028.\n\nEnd.\n'
+complex_markdown = b'## f.txt\n' + complex_note.encode() + b'\n\n'
+env['NOTE_TEXT'] = complex_note
 with Picker('wt') as picker:
     picker.visit_worktree()
     picker.wait(lambda: 'diff' in lines('loads'), 'file picker did not load')
@@ -178,31 +215,31 @@ with Picker('wt') as picker:
     picker.expect(b'0/1')
     picker.key(b'\x19')
     picker.expect(b'Choose a roost pane')
-    picker.expect(b'1) "review":2.1 "first \\"reviewer\\"" (:@22.%9)')
-    picker.expect(b'2) "review":2.2 "second reviewer" (:@22.%10)')
+    picker.expect(b'1) "review":2.1 "first \\"reviewer\\"" (%9)')
+    picker.expect(b'2) "review":2.2 "second reviewer" (%10)')
     picker.expect(b'Pane number')
     assert b'unrelated reviewer' not in picker.output
     assert b'linked window' not in picker.output
-    assert calls() == [['status', '--json']]
+    assert calls() == [version_call, status_call]
     picker.key(b'2\r')
-    picker.expect(b'Review notes for "review":2.2 "second reviewer" (:@22.%10)')
-    picker.expect(expected.replace(b'\n', b'\r\n'))
-    picker.expect(b'Send to :@22.%10? Type yes to send:')
-    assert calls() == [['status', '--json']]
+    picker.expect(b'Review notes for "review":2.2 "second reviewer" (%10)')
+    picker.expect(payload(complex_markdown).encode())
+    picker.expect(b'Send to %10? Type yes to send:')
+    assert calls() == ready('%10')
     try:
         note.write_bytes(b'A concurrent edit that was never confirmed.\n')
         picker.key(b'yes\r')
         picker.expect(b'without observing a new turn')
         picker.expect(b'Press Enter')
-        assert calls() == [['status', '--json'], ['status', '--json'],
-                           ['send', ':@22.%10', expected.decode()]]
+        assert_delivery('%10', complex_markdown)
     finally:
         note.write_bytes(original_note)
     picker.key(b'\r')
     picker.expect(b'ctrl-y send notes')
+env['NOTE_TEXT'] = original_note.decode()
 
-# Escape the choice, then decline the single-target confirmation. Neither
-# path may cause a second status read or a send.
+# Cancel the choice before token capture, then decline a confirmed target.
+# Neither path can invoke guarded delivery.
 case(first, second)
 with Picker('wt') as picker:
     picker.visit_worktree()
@@ -210,30 +247,31 @@ with Picker('wt') as picker:
     picker.expect(b'Pane number')
     picker.key(b'\r')
     picker.expect(b'ctrl-y send notes')
-    assert calls() == [['status', '--json']]
+    assert calls() == [version_call, status_call]
     status(first)
     picker.key(b'\x19')
-    picker.expect(b'Send to :@22.%9? Type yes to send:')
+    picker.expect(b'Send to %9? Type yes to send:')
     picker.key(b'y\r')
     picker.expect(b'ctrl-y send notes')
-    assert calls() == [['status', '--json'], ['status', '--json']]
+    assert calls() == [version_call, status_call] + ready('%9')
 
 shell = dict(first, command='bash')
-for changed in (dict(first, session_id='another-agent'), shell, dict(shell, state=None)):
+for changed in (dict(first, session_id='another-agent'), shell,
+                dict(first, window_id='@23'), dict(first, cwd=str(unrelated_path))):
     case(first)
     # Fake roost exposes the changed pane only when called after the user
     # confirms. The shell keeps the original cwd, harness, and session ID.
-    status(changed, file='recheck.json')
+    status(changed, file='status-3.json')
     with Picker('wt') as picker:
         picker.visit_worktree()
         picker.key(b'\x19')
         picker.expect(b'Type yes to send:')
-        assert calls() == [['status', '--json']]
+        assert calls() == ready('%9')
         picker.key(b'yes\r')
         picker.expect(b'The selected roost pane changed or is unavailable.')
         picker.expect(saved_note_name)
         picker.expect(b'Press Enter')
-        assert calls() == [['status', '--json'], ['status', '--json']]
+        assert calls() == ready('%9') + [status_call]
         picker.key(b'\r')
         picker.expect(b'ctrl-y send notes')
 
@@ -263,7 +301,7 @@ for panes, running, message in (
         picker.expect(saved_note_name)
         picker.expect(b'Export them with preen notes wt')
         picker.expect(b'Press Enter')
-        assert calls() == [['status', '--json']]
+        assert calls() == [version_call, status_call]
         picker.key(b'\r')
         picker.expect(b'ctrl-y send notes')
 
@@ -288,40 +326,90 @@ with Picker('wt', path=str(bare_path)) as picker:
     picker.key(b'\r')
     picker.expect(b'ctrl-y send notes')
 
-# The export is too large for one argv entry. Fall back before opening a
-# confirmation or starting roost.
-case(first)
-try:
-    note.write_bytes('é'.encode() * 1100000)
+
+def expect_fallback(picker, message, expected_calls):
+    picker.expect(message)
+    picker.expect(saved_note_name)
+    picker.expect(b'Export them with preen notes wt')
+    picker.expect(b'Press Enter')
+    if expected_calls is not None:
+        assert calls() == expected_calls, calls()
+    picker.key(b'\r')
+    picker.expect(b'ctrl-y send notes')
+
+
+requires_version = b'Sending review notes requires roost 0.13.0 or newer.'
+for version in ('0.12.99', 'unidentified', '0.13.0-rc.1'):
+    case(first, version=version)
     with Picker('wt') as picker:
         picker.visit_worktree()
         picker.key(b'\x19')
-        picker.expect(b'Review notes exceed the 64 KiB roost send limit')
-        picker.expect(saved_note_name)
-        picker.expect(b'Export them with preen notes wt')
-        picker.expect(b'Press Enter')
-        assert not calls(), calls()
-        assert b'Type yes to send:' not in picker.output
-        picker.key(b'\r')
-        picker.expect(b'ctrl-y send notes')
-finally:
-    note.write_bytes(original_note)
+        expect_fallback(picker, requires_version, [version_call])
 
-# A command that actually ran can also exit 126. Keep that outcome ambiguous
-# and offer the export fallback without attempting a second send.
-case(first, send_exit=126)
+case(first)
 with Picker('wt') as picker:
     picker.visit_worktree()
     picker.key(b'\x19')
     picker.expect(b'Type yes to send:')
+    (box / 'version').write_text('0.12.99')
     picker.key(b'yes\r')
-    picker.expect(b'roost exited 126. Check pane :@22.%9 before sending manually.')
-    picker.expect(saved_note_name)
-    picker.expect(b'Press Enter')
-    assert calls() == [['status', '--json'], ['status', '--json'],
-                       ['send', ':@22.%9', expected.decode()]]
-    picker.key(b'\r')
-    picker.expect(b'ctrl-y send notes')
+    expect_fallback(picker, requires_version, ready('%9') + [status_call, version_call])
+
+for token, message in (
+    ('refuse', b'Could not confirm a dedicated roost agent in pane %9.'),
+    ('', b'Could not read a guarded roost token for pane %9.'),
+):
+    case(first, token=token)
+    with Picker('wt') as picker:
+        picker.visit_worktree()
+        picker.key(b'\x19')
+        expect_fallback(picker, message, ready('%9')[:-1])
+        assert b'Type yes to send:' not in picker.output
+
+# Catch identity changes while obtaining the token, before showing a prompt.
+case(first)
+status(dict(first, session_id='another-agent'), file='status-2.json')
+with Picker('wt') as picker:
+    picker.visit_worktree()
+    picker.key(b'\x19')
+    expect_fallback(picker, b'The selected roost pane changed or is unavailable.', ready('%9'))
+    assert b'Type yes to send:' not in picker.output
+
+# Invalid content and both size limits fail before opening a confirmation or
+# starting roost. The second note fits as Markdown but not as escaped JSON.
+for content, message in (
+    ('é'.encode() * 1100000, b'Review notes exceed the 64 KiB roost send limit'),
+    ('é'.encode() * 12000, b'Encoded review notes exceed the 64 KiB roost send limit'),
+    (b'bad utf-8 \xf0\x80\x80\x80', b'Could not encode the review notes as UTF-8.'),
+    (b'unsafe \x1b[31m text', b'The notes contain terminal control bytes.'),
+):
+    case(first)
+    try:
+        note.write_bytes(content)
+        with Picker('wt') as picker:
+            picker.visit_worktree()
+            picker.key(b'\x19')
+            expect_fallback(picker, message, [])
+            assert b'Type yes to send:' not in picker.output
+    finally:
+        note.write_bytes(original_note)
+
+# A replacement process can retain the same public status. The old token is
+# the one confirmed, and roost decides whether input ever reached the pane.
+for send_exit, message in (
+    (7, b'roost refused guarded delivery to %9. No input was delivered.'),
+    (8, b'Input may have reached %9. Inspect the pane before sending manually.'),
+    (126, b'roost exited 126. Check pane %9 before sending manually.'),
+):
+    case(first, send_exit=send_exit)
+    with Picker('wt') as picker:
+        picker.visit_worktree()
+        picker.key(b'\x19')
+        picker.expect(b'Type yes to send:')
+        (box / 'token-seed').write_text('replacement-token-')
+        picker.key(b'yes\r')
+        expect_fallback(picker, message, None)
+        assert_delivery('%9')
 
 # Once the worktree becomes clean its saved feedback remains available.
 case(first)
@@ -333,12 +421,11 @@ try:
         picker.visit_worktree()
         picker.wait(lambda: b'has changed nothing' in picker.output, 'clean worktree row did not render')
         picker.key(b'\x19')
-        picker.expect(b'Send to :@22.%9? Type yes to send:')
+        picker.expect(b'Send to %9? Type yes to send:')
         picker.key(b'yes\r')
-        picker.expect(b'Review notes sent to :@22.%9.')
+        picker.expect(b'Review notes sent to %9.')
         picker.expect(b'Press Enter')
-        assert calls() == [['status', '--json'], ['status', '--json'],
-                           ['send', ':@22.%9', expected.decode()]]
+        assert_delivery('%9')
         picker.key(b'\r')
         picker.expect(b'ctrl-y send notes')
 finally:
