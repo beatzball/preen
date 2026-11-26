@@ -1467,12 +1467,181 @@ review_picker() {
   VIEWED=false
 }
 
-md_links_supported() {
+md_fzf_supported() {
   local version major minor
   version="$(fzf --version </dev/null 2>/dev/null)" || return 1
   major="${version%%.*}"; minor="${version#*.}"; minor="${minor%%.*}"
   case "$major:$minor" in *[!0-9:]*|:*|*:) return 1 ;; esac
-  [ "$major" -gt 0 ] || [ "$minor" -ge 45 ]
+  [ "$major" -gt 0 ] || [ "$minor" -ge "$1" ]
+}
+
+# Reproduce the layout of Glow's built-in dark style when there is no style
+# file to copy. The heading scan verifies this render against the real style.
+md_heading_style() {
+  if [ "$GLOW_STYLE" = dark ]; then
+    printf '%s\n' '{
+      "document":{"block_prefix":"\n","block_suffix":"\n","margin":2,"color":"252"},
+      "block_quote":{"indent":1,"indent_token":"│ "},
+      "list":{"level_indent":2},
+      "heading":{"block_suffix":"\n"},
+      "h1":{"prefix":" ","suffix":" "},
+      "h2":{"prefix":"## "},
+      "h3":{"prefix":"### "},
+      "h4":{"prefix":"#### "},
+      "h5":{"prefix":"##### "},
+      "h6":{"prefix":"###### "},
+      "hr":{"format":"\n--------\n"},
+      "item":{"block_prefix":"• "},
+      "enumeration":{"block_prefix":". "},
+      "task":{"ticked":"[✓] ","unticked":"[ ] "},
+      "image_text":{"format":"Image: {{.text}} →"},
+      "code":{"prefix":"\u00a0","suffix":"\u00a0"},
+      "code_block":{"margin":2},
+      "definition_description":{"block_prefix":"\n🠶 "}
+    }'
+  else
+    cat "$GLOW_STYLE"
+  fi | LC_ALL=C awk '
+    { json = json $0 "\n" }
+    END {
+      # Keep the original JSON intact. Read only heading prefix/suffix string
+      # tokens, then append the marked fields. Glow merges repeated objects
+      # into its style structs, retaining their other fields.
+      str = "\"([^\"\\\\]|\\\\.)*\""
+      rest = json
+      while (match(rest, str "|[][{}]")) {
+        token = substr(rest, RSTART, RLENGTH)
+        rest = substr(rest, RSTART + RLENGTH)
+        if (token == "{" || token == "[") depth++
+        else if (token == "}" || token == "]") depth--
+        else if (rest ~ /^[[:space:]]*:/) {
+          key = tolower(substr(token, 2, length(token) - 2))
+          if (depth == 1) group = key
+          if (depth == 2 && group ~ /^(heading|h[1-6])$/ &&
+              key ~ /^block_(prefix|suffix)$/) {
+            value = rest
+            sub(/^[[:space:]]*:[[:space:]]*/, "", value)
+            if (match(value, "^" str)) props[group, key] = substr(value, 1, RLENGTH)
+          }
+        }
+      }
+      if (!sub(/}[[:space:]]*$/, "", json)) exit 1
+      printf "%s", json
+      comma = json ~ /{[[:space:]]*$/ ? "" : ","
+      for (level = 1; level <= 6; level++) {
+        prefix = field("h" level, "block_prefix")
+        suffix = field("h" level, "block_suffix")
+        printf "%s\"h%d\":{\"block_prefix\":\"%s\\u001b[990%dm\"", comma, level, prefix, level
+        printf ",\"block_suffix\":\"\\u001b[9900m%s\"}", suffix
+        comma = ","
+      }
+      print "}"
+    }
+    function field(group, key,  value) {
+      value = props[group, key]
+      if (length(value) <= 2) value = props["heading", key]
+      return substr(value, 2, length(value) - 2)
+    }'
+}
+
+# Glow marks parsed heading blocks with zero-width SGR sequences at their
+# boundaries. Compare the marked render to the actual preview line for line
+# before trusting the coordinates. A duplicate label is a different row.
+md_heading_rows() {
+  local file="$1" width="$2" raw="$PREEN_STATE/md-heading-preview" marked="$PREEN_STATE/md-heading-marked"
+  local style="$PREEN_STATE/md-headings.json"
+  md_heading_style > "$style" &&
+    render_md "$width" "$file" > "$raw" &&
+    GLOW_STYLE="$style" render_md "$width" "$file" > "$marked" || return 1
+  LC_ALL=C awk '
+    function plain(s) {
+      gsub(/\033\][^\007\033]*(\007|\033\\)/, "", s)
+      gsub(/\033\[[0-?]*[ -\/]*[@-~]/, "", s)
+      sub(/[[:space:]]+$/, "", s)
+      return s
+    }
+    function add(s) {
+      s = plain(s)
+      gsub(/[[:cntrl:]]/, " ", s)
+      sub(/^[[:space:]]+/, "", s)
+      if (length(s)) label = label (length(label) ? " " : "") s
+    }
+    FILENAME == ARGV[1] {
+      if ($0 ~ /\033\[990[0-6]m/) bad = 1
+      preview[FNR] = plain($0)
+      count = FNR
+      next
+    }
+    {
+      if (FNR > count || plain($0) != preview[FNR]) bad = 1
+      while (match($0, /\033\[990[0-6]m/)) {
+        before = substr($0, 1, RSTART - 1)
+        mark = substr($0, RSTART + 5, 1)
+        $0 = substr($0, RSTART + RLENGTH)
+        if (mark == "0") {
+          if (!line) bad = 1
+          add(before)
+          printf "%d\t%s\n", line, length(label) ? label : "(empty heading)"
+          line = 0
+        } else {
+          if (line) bad = 1
+          line = FNR
+          label = ""
+        }
+      }
+      if (line) add($0)
+      marked_count = FNR
+    }
+    END { if (bad || line || count != marked_count) exit 1 }
+  ' "$raw" "$marked"
+}
+
+md_pick_heading() {
+  local file="$1" width="${FZF_PREVIEW_COLUMNS:-}" chosen
+  local rows="$PREEN_STATE/md-headings" action="$PREEN_STATE/md-heading-action"
+  [ -n "$file" ] || return 0
+  case "$width" in
+    ''|0|*[!0-9]*) printf 'hidden\n' > "$action"; return ;;
+  esac
+  if ! md_heading_rows "$file" "$width" > "$rows" 2>/dev/null; then
+    printf 'unavailable\n' > "$action"
+    return
+  fi
+  if [ ! -s "$rows" ]; then
+    printf 'empty\n' > "$action"
+    return
+  fi
+  chosen="$(FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' fzf \
+    --layout=reverse --border=rounded --no-sort --prompt='  heading ❯ ' \
+    --delimiter=$'\t' --nth=2.. --header='enter jump · esc back · ctrl-c quit' \
+    --bind 'enter:accept-non-empty' \
+    --bind 'ctrl-c:execute-silent(touch "$PREEN_STATE/quit")+abort' < "$rows")" \
+    || { printf 'back\n' > "$action"; return; }
+  printf '%s %s\n' "${chosen%%$'\t'*}" "$width" > "$action"
+}
+
+md_heading_action() {
+  local action="$PREEN_STATE/md-heading-action" result width
+  IFS=' ' read -r result width 2>/dev/null < "$action" || return 0
+  rm -f "$action"
+  if [ -f "$PREEN_STATE/quit" ]; then
+    printf 'abort'
+    return
+  fi
+  case "$result" in
+    empty) printf 'change-border-label( preen · md · no headings )' ;;
+    hidden) printf 'change-border-label( preen · md · show the preview to jump )' ;;
+    unavailable) printf 'change-border-label( preen · md · cannot locate headings )' ;;
+    back) printf 'change-border-label( preen · md )' ;;
+    ''|*[!0-9]*) ;;
+    *)
+      if [ "$width" != "${FZF_PREVIEW_COLUMNS:-}" ]; then
+        printf 'change-border-label( preen · md · preview resized, try again )'
+        return
+      fi
+      printf 'change-border-label( preen · md )+change-preview-window(+0)+change-preview-window(+%s)+refresh-preview' "$result"
+      ;;
+  esac
 }
 
 # Glow already parses Markdown, including reference links and links in tables.
@@ -1655,6 +1824,8 @@ md_link_action() {
 
 # ---- hooks fzf calls back into ----------------------------------------------
 case "${1:-}" in
+  --md-headings) md_pick_heading "${2:-}"; exit $? ;;
+  --md-heading-action) md_heading_action; exit $? ;;
   --md-links) md_pick_link "${2:-}"; exit $? ;;
   --md-link-action) md_link_action "$2"; exit $? ;;
   --edit)
@@ -1816,8 +1987,9 @@ keys inside the picker
   ctrl-e   open in $EDITOR at the first diff hunk (Markdown opens at the top)
            known editors get a line jump; unknown editors open plainly
   ctrl-l   choose a relative Markdown link in md mode (fzf 0.45 or newer)
+  ctrl-g   jump to a heading in the Markdown preview (fzf 0.57 or newer)
   ctrl-/   hide or show the preview
-  esc      go back from links, worktree files, or commit files, or quit
+  esc      go back from headings, links, worktree files, or commit files, or quit
   ctrl-c   quit
 H
     exit 0 ;;
@@ -1878,15 +2050,26 @@ WITH_NTH='..'; PICK='{}'; EDIT='{}'; ENTER=""; VIEWED=false
 # array as unset under set -u.
 run_picker() {
   local watch_args=() review_binds=() md_args=() send_binds=()
+  local md_reset
   local edit_action="execute(\"\$PREEN_SELF\" --edit $PICK $EDIT)" preview_action="\"\$PREEN_SELF\" --preview $PICK"
   case "$(cat "$PREEN_STATE/kind")" in
     log-list) edit_action=ignore ;;
     md)
-      if md_links_supported; then
+      if md_fzf_supported 45; then
         HEADER="$HEADER"$'\nctrl-l links'
         md_args=(--sync
           --bind 'ctrl-l:execute("$PREEN_SELF" --md-links {})+transform("$PREEN_SELF" --md-link-action pick)'
           --bind 'load:transform("$PREEN_SELF" --md-link-action load)')
+      fi
+      # fzf 0.57 started exporting the current preview size to key actions.
+      if md_fzf_supported 57; then
+        # A hidden preview has no dimensions. Ignore a width inherited from
+        # an outer fzf so it cannot stand in for the hidden inner preview.
+        unset FZF_PREVIEW_COLUMNS
+        HEADER="$HEADER · ctrl-g headings"
+        md_reset="transform(sh -c 'if [ -n \"\$FZF_PREVIEW_COLUMNS\" ]; then printf \"change-preview-window(+0)\"; else printf \"change-preview-window(+0,hidden)\"; fi')"
+        md_args+=(--bind 'ctrl-g:execute("$PREEN_SELF" --md-headings {})+transform("$PREEN_SELF" --md-heading-action)'
+          --bind "focus:$md_reset" --bind "resize:$md_reset")
       fi
       ;;
   esac
