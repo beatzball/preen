@@ -1576,7 +1576,9 @@ md_heading_rows() {
     function visible(s) {
       s = plain(s)
       gsub(/[[:cntrl:]]/, " ", s)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+      # Glow styles can use a nonbreaking space as heading padding.
+      sub(/^([[:space:]]|\302\240)+/, "", s)
+      sub(/([[:space:]]|\302\240)+$/, "", s)
       return s
     }
     function add(s) {
@@ -1680,11 +1682,15 @@ md_heading_action() {
 }
 
 md_heading_reset() {
-  rm -f "$PREEN_STATE/md-heading-jumped"
-  if [ -n "${FZF_PREVIEW_COLUMNS:-}" ]; then
+  local jumped="$PREEN_STATE/md-heading-jumped"
+  [ -f "$jumped" ] || return 0
+  rm -f "$jumped" || return 1
+  if [ -z "${FZF_PREVIEW_COLUMNS:-}" ]; then
+    printf 'change-preview-window(+0,hidden)'
+  elif [ "$1" = refresh ]; then
     printf 'change-preview-window(+0)+refresh-preview'
   else
-    printf 'change-preview-window(+0,hidden)'
+    printf 'change-preview-window(+0)'
   fi
 }
 
@@ -1835,7 +1841,7 @@ md_pick_link() {
 }
 
 md_link_action() {
-  local action="$PREEN_STATE/md-link-action" position="$PREEN_STATE/md-link-position" result
+  local action="$PREEN_STATE/md-link-action" position="$PREEN_STATE/md-link-position" result reset
   [ "$1" != load ] || action="$position"
   IFS= read -r result 2>/dev/null < "$action" || return 0
   rm -f "$action"
@@ -1855,6 +1861,11 @@ md_link_action() {
     *)
       # pos uses the filtered results. Apply it after the cleared list loads.
       printf '%s\n' "$result" > "$position" || return 1
+      # A relative link can reload the same file without a change of focus.
+      if [ -f "$PREEN_STATE/md-heading-jumped" ]; then
+        reset="$(md_heading_reset '')" || return 1
+        printf '%s+' "$reset"
+      fi
       printf 'change-border-label( preen · md )+clear-query+reload-sync(cat "$PREEN_STATE/decorated")'
       return ;;
   esac
@@ -1870,7 +1881,7 @@ md_link_action() {
 case "${1:-}" in
   --md-headings) md_pick_heading "${2:-}"; exit $? ;;
   --md-heading-action) md_heading_action "${2:-}"; exit $? ;;
-  --md-heading-reset) md_heading_reset; exit $? ;;
+  --md-heading-reset) md_heading_reset "${2:-}"; exit $? ;;
   --md-links) md_pick_link "${2:-}"; exit $? ;;
   --md-link-action) md_link_action "$2"; exit $? ;;
   --edit)
@@ -2096,6 +2107,7 @@ WITH_NTH='..'; PICK='{}'; EDIT='{}'; ENTER=""; VIEWED=false
 run_picker() {
   local watch_args=() review_binds=() md_args=() send_binds=()
   local md_reset
+  local layout_action='execute-silent("$PREEN_SELF" --toggle)+refresh-preview' preview_toggle=toggle-preview
   local edit_action="execute(\"\$PREEN_SELF\" --edit $PICK $EDIT)" preview_action="\"\$PREEN_SELF\" --preview $PICK"
   case "$(cat "$PREEN_STATE/kind")" in
     log-list) edit_action=ignore ;;
@@ -2114,9 +2126,13 @@ run_picker() {
         HEADER="$HEADER"$'\nctrl-g headings'
         # fzf can enqueue the next preview before running its focus action.
         # Restart that preview once with the cleared jump offset.
-        md_reset='transform(test -f "$PREEN_STATE/md-heading-jumped" && "$PREEN_SELF" --md-heading-reset)'
+        md_reset='test -f "$PREEN_STATE/md-heading-jumped" && "$PREEN_SELF" --md-heading-reset'
         md_args+=(--bind 'ctrl-g:execute("$PREEN_SELF" --md-headings {})+transform("$PREEN_SELF" --md-heading-action {})'
-          --bind "focus:$md_reset" --bind "resize:$md_reset")
+          --bind "focus:transform($md_reset refresh)" --bind "resize:transform($md_reset refresh)")
+        # Both keys can replace the verified render with live content. Reset
+        # the offset first and let each key do its usual redraw.
+        layout_action="transform($md_reset)+$layout_action"
+        preview_toggle="transform($md_reset)+$preview_toggle"
       fi
       ;;
   esac
@@ -2164,11 +2180,11 @@ run_picker() {
     --color 'fg:#c8c3e0,fg+:#e0dcf5,bg+:#2a2640,hl:#bd93f9,hl+:#bd93f9' \
     --color 'border:#7c6ff0,label:#bd93f9,prompt:#7c6ff0,pointer:#bd93f9' \
     --color 'header:#8a84b0,info:#8a84b0,spinner:#7c6ff0,marker:#3a3558' \
-    --bind "ctrl-s:execute-silent(\"\$PREEN_SELF\" --toggle)+refresh-preview" \
+    --bind "ctrl-s:$layout_action" \
     --bind "enter:$ENTER" \
     --bind "ctrl-e:$edit_action" \
     --bind 'ctrl-c:execute-silent(touch "$PREEN_STATE/quit")+abort' \
-    --bind 'ctrl-/:toggle-preview' \
+    --bind "ctrl-/:$preview_toggle" \
     --bind 'ctrl-d:preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down+preview-down' \
     --bind 'ctrl-u:preview-up+preview-up+preview-up+preview-up+preview-up+preview-up+preview-up+preview-up' \
     --bind 'pgdn:preview-half-page-down' \

@@ -44,6 +44,7 @@ printf '\n'
 if [ "${PREEN_T_MODE:-}" = quoted-blank ]; then printf '  │ '; fi
 heading 2
 if [ "${PREEN_T_MODE:-}" = leading-blank ]; then printf '   \n'; fi
+if [ "${PREEN_T_MODE:-}" = nonbreaking-blank ]; then printf '\302\240\n'; fi
 if [ "${PREEN_T_MODE:-}" = quoted-blank ]; then printf '\n  │ \n  │ '; fi
 if [ "$4" = 28 ]; then
   printf 'A long heading\n  over two lines'
@@ -78,10 +79,16 @@ chmod +x "$box/shim/glow" "$box/shim/fzf"
 PREEN_T_FZF_VERSION=0.56.0 "$PREEN" md docs
 assert_contains "$(cat "$box/args")" 'ctrl-l:execute' 'fzf 0.56 can still follow links'
 assert_not_contains "$(cat "$box/args")" 'ctrl-g:execute' 'headings need preview dimensions on key actions'
+assert_contains "$(cat "$box/args")" 'ctrl-/:toggle-preview' 'older fzf keeps the ordinary preview toggle'
 FZF_PREVIEW_COLUMNS=90 "$PREEN" md docs
-assert_contains "$(cat "$box/args")" 'ctrl-g:execute' 'Markdown picker opens headings on fzf 0.57'
-assert_contains "$(cat "$box/args")" 'focus:transform' 'file changes reset the jump offset'
-assert_contains "$(cat "$box/args")" 'resize:transform' 'resizes reset the jump offset'
+args="$(cat "$box/args")"
+assert_contains "$args" 'ctrl-g:execute' 'Markdown picker opens headings on fzf 0.57'
+reset='transform(test -f "$PREEN_STATE/md-heading-jumped" && "$PREEN_SELF" --md-heading-reset'
+assert_contains "$args" "focus:$reset refresh)" 'file changes reset and refresh after a jump'
+assert_contains "$args" "resize:$reset refresh)" 'resizes reset and refresh after a jump'
+assert_contains "$args" "ctrl-/:$reset)+toggle-preview" 'the preview toggle resets a jump before it can replace the render'
+assert_contains "$args" "ctrl-s:$reset)"'+execute-silent("$PREEN_SELF" --toggle)+refresh-preview' \
+  'the layout key resets a jump before refreshing'
 grep -qx 'ctrl-g headings' "$box/args"
 assert_true "$?" 'heading hint has its own line'
 assert_eq "$(cat "$box/inherited-width")" '' 'a width from an outer fzf cannot mask a hidden preview'
@@ -100,6 +107,8 @@ assert_contains "$(pick 1)" 'change-preview-window(+4)' 'the first Same heading 
 assert_contains "$(FZF_PREVIEW_COLUMNS=74 pick 3)" 'change-preview-window(+8)' 'the wide render lands one line earlier'
 assert_contains "$(PREEN_T_MODE=leading-blank pick 2)" 'change-preview-window(+7)' \
   'heading starts on its first line of text when formatting inserts a blank row'
+assert_contains "$(PREEN_T_MODE=nonbreaking-blank pick 2)" 'change-preview-window(+7)' \
+  'a line with only nonbreaking space does not count as heading text'
 assert_contains "$(PREEN_T_MODE=quoted-blank pick 2)" 'change-preview-window(+8)' \
   'a quote gutter alone does not count as heading text'
 assert_contains "$(PREEN_T_MODE=empty-heading pick 3)" 'change-preview-window(+9)' \
@@ -123,12 +132,27 @@ assert_contains "$(pick 3)" 'preview(cat "$PREEN_STATE/md-heading-accepted")' \
   'a successful jump displays the same render it verified'
 [ -f "$PREEN_STATE/md-heading-jumped" ]
 assert_true "$?" 'a successful jump records the active offset'
-assert_eq "$("$PREEN" --md-heading-reset)" 'change-preview-window(+0)+refresh-preview' \
+assert_eq "$("$PREEN" --md-heading-reset refresh)" 'change-preview-window(+0)+refresh-preview' \
   'after a jump the next visible preview refreshes at the top'
 [ ! -e "$PREEN_STATE/md-heading-jumped" ]
 assert_true "$?" 'reset consumes the active offset'
+assert_eq "$("$PREEN" --md-heading-reset)" '' 'ordinary previews do not change their offset on toggle'
+PREEN_T_CHOICE=3 "$PREEN" --md-headings docs/guide.md
+"$PREEN" --md-heading-action docs/guide.md > /dev/null
+assert_eq "$("$PREEN" --md-heading-reset)" 'change-preview-window(+0)' \
+  'explicit refresh keys clear the offset and do their normal redraw'
+PREEN_T_CHOICE=3 "$PREEN" --md-headings docs/guide.md
+"$PREEN" --md-heading-action docs/guide.md > /dev/null
 assert_eq "$(FZF_PREVIEW_COLUMNS= "$PREEN" --md-heading-reset)" 'change-preview-window(+0,hidden)' \
   'a hidden preview stays hidden when clearing the offset'
+PREEN_T_CHOICE=3 "$PREEN" --md-headings docs/guide.md
+"$PREEN" --md-heading-action docs/guide.md > /dev/null
+printf '1\n' > "$PREEN_STATE/md-link-action"
+out="$("$PREEN" --md-link-action pick)"
+assert_contains "$out" 'change-preview-window(+0)+change-border-label' \
+  'following a link clears the jump before reloading, even on the same file'
+assert_contains "$out" 'clear-query+reload-sync' 'a link still reloads the list after clearing a jump'
+"$PREEN" --md-link-action load > /dev/null
 PREEN_T_CHOICE=3 "$PREEN" --md-headings docs/guide.md
 printf 'Inserted paragraph\n\n' > docs/guide.md
 out="$("$PREEN" --md-heading-action docs/guide.md)"
