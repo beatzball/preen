@@ -227,13 +227,14 @@ assert_eq "$?" "1" "and exits rather than writing its state to the filesystem ro
 # Every job also reports whether its failure actually FIRED. A job whose file
 # died earlier comes back having tested nothing, and that fails the run too.
 #
-# The template is built once and copied per run, because a git init plus a
-# commit per run is the expensive part, and the runs go in parallel.
+# The template is built once and copied per run. Once a clean run passes, its
+# fault jobs can use free slots while other clean runs are still going.
 
 shim="$box/shim"; mkdir -p "$shim"
 real_mktemp="$(command -v mktemp)"
-# Counts every keyed call, and fails only the Nth use of the one key it was told
-# to fail. An unkeyed call is traced up its parents to see whose it is: preen's
+# Counts every key during discovery. A fault job only counts calls to its
+# selected key, and fails on the Nth use. An unkeyed call in a clean run is
+# traced up its parents to see whose it is: preen's
 # own calls and git's (a hook can call mktemp) are not this suite's business; any
 # other is a raw mktemp, and is written down — "unknown" included, because a
 # call nobody can place is not one to wave through.
@@ -297,11 +298,14 @@ owner_of() {
   echo unknown
 }
 if [ -n "\${PREEN_MKTEMP_VIA:-}" ]; then
-  if [ -n "\${PREEN_MKTEMP_COUNTS:-}" ]; then
+  site=\${PREEN_MKTEMP_FAIL_SITE:-}
+  if [ -n "\${PREEN_MKTEMP_COUNTS:-}" ] \\
+     && { [ -z "\$site" ] || [ "\$PREEN_MKTEMP_VIA" = "\$site" ]; }; then
     c="\$PREEN_MKTEMP_COUNTS/\$PREEN_MKTEMP_VIA"
-    n=\$(cat "\$c" 2>/dev/null || echo 0); n=\$((n + 1)); printf '%s' "\$n" > "\$c"
-    if [ "\$PREEN_MKTEMP_VIA" = "\${PREEN_MKTEMP_FAIL_SITE:-}" ] \\
-       && [ "\$n" -eq "\${PREEN_MKTEMP_FAIL_NTH:-0}" ]; then
+    n=0
+    if [ -f "\$c" ]; then IFS= read -r n < "\$c"; fi
+    n=\$((n + 1)); printf '%s\n' "\$n" > "\$c"
+    if [ "\$n" -eq "\${PREEN_MKTEMP_FAIL_NTH:-0}" ]; then
       : > "\${PREEN_MKTEMP_FIRED:-/dev/null}"
       exit 1
     fi
@@ -366,13 +370,29 @@ manifest() {
 tmpl_manifest="$(manifest "$tmpl")"
 
 swept_files() {
-  # every test file except this one, which would recurse
-  for t in "$PREEN_ROOT"/tests/test-*.sh; do
-    b="${t##*/}"
-    case "$b" in test-harness.sh) continue ;; esac
-    printf '%s\n' "$b"
-  done
+  # Start with larger tests so they can finish discovering their faults while
+  # smaller tests are still running. Size is only a scheduling hint.
+  local t
+  { for t in "$PREEN_ROOT"/tests/test-*.sh; do
+      case "${t##*/}" in test-harness.sh) continue ;; esac
+      printf '%d %s\n' "$(wc -c < "$t")" "${t##*/}"
+    done
+  } | LC_ALL=C sort -k1,1nr -k2,2 | cut -d' ' -f2-
 }
+
+# Use copy-on-write clones when the filesystem supports them. macOS cp falls
+# back to a regular copy, and changes in a job cannot write through to the
+# template. The wider pool helps keep macOS workers busy during process and
+# filesystem waits. The environment override also applies to clean runs.
+case "$OSTYPE" in
+  darwin*) copy=(/bin/cp -cR); default_width=8 ;;
+  *) copy=(cp -R); default_width=4 ;;
+esac
+width="${PREEN_HARNESS_JOBS:-$default_width}"
+if ! [ "$width" -gt 0 ] 2>/dev/null; then
+  printf '  FAIL: PREEN_HARNESS_JOBS must be a positive integer\n'
+  exit 1
+fi
 
 run_job() {
   # run_job <file> <key> <nth> <slot> -> a verdict line in $box/out.<slot>
@@ -392,18 +412,22 @@ run_job() {
   # job runs nothing the clean run of its file did not already run, up to the
   # one call it fails.
   local f="$1" key="$2" nth="$3" slot="$4"
-  local pen="$box/s$slot" work="$box/s$slot/checkout" out="$box/out.$slot" rc nfail raw=""
+  local pen="$box/s$slot" work="$box/s$slot/checkout" out="$box/out.$slot" rc nfail raw="" site="$2"
   rm -rf "$pen"; mkdir -p "$pen/tmp" "$pen/counts"; : > "$pen/raw"
-  [ "$key" = - ] && raw="$pen/raw"
-  cp -R "$tmpl" "$work"
+  if [ "$key" = - ]; then raw="$pen/raw"; site=""; fi
+  if ! "${copy[@]}" "$tmpl" "$work"; then
+    printf 'COPY FAILED %s %s #%s\n' "$f" "$key" "$nth" > "$out"
+    rm -rf "$pen"
+    return
+  fi
   # A TMPDIR that WORKS. The point is that mktemp fails at one call and nowhere
   # else, so the run gets that far. Breaking TMPDIR outright is what the first
   # version of this file did, and it never reached past lib.sh's own first call.
   ( cd "$work/tests" \
       && TMPDIR="$pen/tmp" PREEN_MKTEMP_COUNTS="$pen/counts" \
-         PREEN_MKTEMP_FAIL_SITE="$key" PREEN_MKTEMP_FAIL_NTH="$nth" \
+         PREEN_MKTEMP_FAIL_SITE="$site" PREEN_MKTEMP_FAIL_NTH="$nth" \
          PREEN_MKTEMP_FIRED="$pen/fired" PREEN_MKTEMP_RAW="$raw" \
-         PATH="$shim:$PATH" bash "$f" </dev/null >"$pen/log" 2>&1 )
+         PATH="$shim:$PATH" exec bash "$f" </dev/null >"$pen/log" 2>&1 )
   rc=$?
   if [ "$(manifest "$work")" != "$tmpl_manifest" ]; then
     printf 'DAMAGED %s %s #%s\n' "$f" "$key" "$nth" > "$out"
@@ -437,64 +461,6 @@ run_job() {
   rm -rf "$pen"
 }
 
-# $width runs at a time, and a new one starts the moment any slot is free. bash
-# 3.2 has no `wait -n`, so each run leaves a free.<slot> marker when it ends and
-# the loop looks for one. Waiting for a whole batch instead left three slots idle
-# behind every slow file, and the clean runs are nothing but slow files.
-width="${PREEN_HARNESS_JOBS:-4}"
-
-sweep() {
-  # sweep <job list> -> runs every "file key nth" line; sets bad, done_n, reached
-  local f key nth s slot
-  bad=""; done_n=0; reached=0
-  s=0; while [ "$s" -lt "$width" ]; do : > "$box/free.$s"; s=$((s + 1)); done
-  while IFS=' ' read -r f key nth; do
-    [ -n "$f" ] || continue
-    slot=""
-    while [ -z "$slot" ]; do
-      s=0
-      while [ "$s" -lt "$width" ]; do
-        if [ -f "$box/free.$s" ]; then slot="$s"; break; fi
-        s=$((s + 1))
-      done
-      [ -n "$slot" ] || sleep 0.1
-    done
-    rm -f "$box/free.$slot"
-    collect "$slot"
-    { run_job "$f" "$key" "${nth:-1}" "$slot"; : > "$box/free.$slot"; } &
-  done < "$1"
-  wait
-  s=0; while [ "$s" -lt "$width" ]; do collect "$s"; s=$((s + 1)); done
-}
-
-collect() {
-  # collect <slot> -> fold the verdict that slot left, if any, into the totals
-  #
-  # A run that died without writing one is not counted, so done_n comes up
-  # short and "every job reported back" says so.
-  local v
-  [ -f "$box/out.$1" ] || return 0
-  v="$(cat "$box/out.$1")"; rm -f "$box/out.$1"
-  case "$v" in
-    ok*) reached=$((reached + 1)) ;;
-    *)   bad="$bad
-  $v" ;;
-  esac
-  done_n=$((done_n + 1))
-}
-
-# The clean runs, one per file.
-clean="$box/clean"; : > "$clean"
-for b in $(swept_files); do printf '%s - 0\n' "$b" >> "$clean"; done
-nclean="$(grep -c . "$clean" || true)"
-sweep "$clean"
-assert_eq "$bad" "" \
-  "every test file runs clean under the counting mktemp, with no raw mktemp call and no damage"
-assert_eq "$reached" "$nclean" "and all $nclean of them finished"
-
-# The jobs, from what the clean runs counted.
-jobs="$box/jobs"; : > "$jobs"
-#
 # Which uses of a key are failed. A key made only of the $guarded helpers —
 # `preen-test+new_repo` — runs the same body at every call, and what differs is
 # the caller, which part 1 holds: every capture carries `|| exit 1`, and no test
@@ -515,21 +481,88 @@ first_use_ok() {
 }
 depth="${PREEN_HARNESS_DEPTH:-default}"
 calls=0
-for b in $(swept_files); do
-  [ -d "$box/counts.$b" ] || continue
-  for c in "$box/counts.$b"/*; do
+njobs=0
+jobs="$box/jobs"; : > "$jobs"
+
+queue_faults() {
+  local f="$1" c key uses nth
+  for c in "$box/counts.$f"/*; do
     [ -f "$c" ] || continue
-    key="${c##*/}"; u="$(cat "$c")"; calls=$((calls + u))
-    if [ "$depth" = full ] || ! first_use_ok "$key"; then
-      k=1; while [ "$k" -le "$u" ]; do
-        printf '%s %s %s\n' "$b" "$key" "$k" >> "$jobs"; k=$((k + 1))
-      done
-    else
-      printf '%s %s 1\n' "$b" "$key" >> "$jobs"
+    key="${c##*/}"
+    IFS= read -r uses < "$c"
+    calls=$((calls + uses))
+    if [ "$depth" != full ] && first_use_ok "$key"; then
+      uses=1
     fi
+    for ((nth=1; nth<=uses; nth++)); do
+      queue+=("$f $key $nth")
+      printf '%s %s %s\n' "$f" "$key" "$nth" >> "$jobs"
+      njobs=$((njobs + 1))
+    done
   done
-done
-njobs="$(grep -c . "$jobs" || true)"
+}
+
+collect() {
+  local slot="$1" f="$2" key="$3" v
+  # Missing verdicts leave the clean or fault count short.
+  [ -f "$box/out.$slot" ] || return 0
+  v="$(cat "$box/out.$slot")"; rm -f "$box/out.$slot"
+  if [ "$key" = - ]; then
+    case "$v" in
+      ok*) clean_done=$((clean_done + 1)); queue_faults "$f" ;;
+      *) clean_bad="$clean_bad
+  $v" ;;
+    esac
+  else
+    done_n=$((done_n + 1))
+    case "$v" in
+      ok*) reached=$((reached + 1)) ;;
+      *) bad="$bad
+  $v" ;;
+    esac
+  fi
+}
+
+sweep() {
+  # Bash 3.2 has no wait -n. Poll active slots and reap finished jobs, even
+  # when they died before writing a verdict. All clean jobs start before any
+  # fault jobs. Fault jobs only need the counts from their own clean run.
+  local next=0 active=0 progress slot pid f key nth
+  local -a pids files keys
+  while [ "$next" -lt "${#queue[@]}" ] || [ "$active" -gt 0 ]; do
+    progress=0
+    for ((slot=0; ; slot++)); do
+      [ "$slot" -lt "$width" ] || break
+      pid="${pids[slot]:-}"
+      if [ -n "$pid" ]; then
+        kill -0 "$pid" 2>/dev/null && continue
+        wait "$pid" || :
+        collect "$slot" "${files[slot]}" "${keys[slot]}"
+        unset 'pids[slot]'
+        active=$((active - 1))
+        progress=1
+      fi
+      if [ "$next" -lt "${#queue[@]}" ]; then
+        IFS=' ' read -r f key nth <<< "${queue[next]}"
+        run_job "$f" "$key" "$nth" "$slot" &
+        pids[slot]=$!; files[slot]="$f"; keys[slot]="$key"
+        next=$((next + 1)); active=$((active + 1))
+        progress=1
+      fi
+    done
+    [ "$progress" -ne 0 ] || sleep 0.1
+  done
+}
+
+queue=()
+for b in $(swept_files); do queue+=("$b - 0"); done
+nclean="${#queue[@]}"
+clean_done=0; clean_bad=""
+bad=""; done_n=0; reached=0
+sweep
+assert_eq "$clean_bad" "" \
+  "every test file runs clean under the counting mktemp, with no raw mktemp call and no damage"
+assert_eq "$clean_done" "$nclean" "and all $nclean of them finished"
 
 # The pin. Whatever depth, the set of file-and-key pairs must be exactly the one
 # written down: a key that disappears — a helper bypassed, a test that stopped
@@ -543,7 +576,6 @@ drift="$( LC_ALL=C comm -23 "$box/pinned" "$box/swept" | sed 's/^/  pinned, not 
 npinned="$(grep -c . "$box/pinned" || true)"
 assert_eq "$drift" "" "the sweep covers exactly the $npinned keys pinned in tests/sweep-sites"
 
-sweep "$jobs"
 printf '  NOTE: %s clean runs made %s helper calls; %s jobs at depth %s, %s of them fired\n' \
   "$nclean" "$calls" "$njobs" "$depth" "$reached"
 assert_eq "$done_n" "$njobs" "every job in the sweep reported back"

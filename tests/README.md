@@ -223,9 +223,8 @@ Then, by default:
   callers are lines no rule reads, and one guarded call must not pass for an
   unguarded one later in the file.
 
-That is 130 jobs today, out of 138 helper calls in a clean pass. A test's own
-function named `main` or `source` is a frame like any other: only bash's own
-`main` frame is dropped from a key, and it is told apart by being called from
+A test's own function named `main` or `source` is a frame like any other. Only
+bash's own `main` frame is dropped from a key. It is identified by a call from
 line 0 outside `bash -c`, not by its name. A call made while `lib.sh` is being sourced reads
 `preen-dep+source`. `PREEN_HARNESS_DEPTH=full`
 fails every use of every key, `lib.sh`'s helpers included, at one job per call.
@@ -246,13 +245,10 @@ like preen, because it runs in a fixture under `$TMPDIR`, not in the checkout;
 and a call that sets `PREEN_MKTEMP_VIA` itself is taken at its word. Neither is
 a slip anyone makes by accident.
 
-It is the slow half of the suite — more than all the other files together: one
-clean run per file and then 130 jobs of real fixture work, four at a time. The whole
-suite took a little over four minutes on a laptop that was busy with other
-work, and a sweep alone has taken more than six on a busier one, so it is not
-something to put behind a short timeout.
-`PREEN_HARNESS_JOBS=8 tests/run.sh` runs eight at a time if the machine has the
-cores, and `tests/run.sh NAME` runs one file without the sweep while you work.
+Once a file's clean run passes, its fault jobs can run while other files finish
+discovering their calls. The pool runs up to eight jobs on macOS and four
+elsewhere. Set `PREEN_HARNESS_JOBS` to override the limit, or run
+`tests/run.sh NAME` to focus on one file while you work.
 
 ## Writing a new one
 
