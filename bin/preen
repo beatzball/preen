@@ -1515,7 +1515,7 @@ md_heading_style() {
         if (token == "{" || token == "[") depth++
         else if (token == "}" || token == "]") depth--
         else if (rest ~ /^[[:space:]]*:/) {
-          key = tolower(substr(token, 2, length(token) - 2))
+          key = member_name(token)
           if (depth == 1) group = key
           if (depth == 2 && group ~ /^(heading|h[1-6])$/ &&
               key ~ /^block_(prefix|suffix)$/) {
@@ -1536,6 +1536,19 @@ md_heading_style() {
         comma = ","
       }
       print "}"
+    }
+    function member_name(token,  name, part, digits, byte) {
+      token = substr(token, 2, length(token) - 2)
+      digits = "0123456789abcdef"
+      while (match(token, /\\(u00[0-7][[:xdigit:]]|.)/)) {
+        # The heading fields have ASCII names. Other escapes cannot match.
+        if (RLENGTH != 6) return ""
+        part = tolower(substr(token, RSTART + 4, 2))
+        byte = (index(digits, substr(part, 1, 1)) - 1) * 16 + index(digits, substr(part, 2)) - 1
+        name = name substr(token, 1, RSTART - 1) sprintf("%c", byte)
+        token = substr(token, RSTART + RLENGTH)
+      }
+      return tolower(name token)
     }
     function field(group, key,  value) {
       value = props[group, key]
@@ -1560,11 +1573,20 @@ md_heading_rows() {
       sub(/[[:space:]]+$/, "", s)
       return s
     }
-    function add(s) {
+    function visible(s) {
       s = plain(s)
       gsub(/[[:cntrl:]]/, " ", s)
-      sub(/^[[:space:]]+/, "", s)
-      if (length(s)) label = label (length(label) ? " " : "") s
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+      return s
+    }
+    function add(s) {
+      s = visible(s)
+      # A blank continuation can still carry a block quote gutter.
+      if (FNR > line && s == gutter) return
+      if (length(s)) {
+        if (!text_line) text_line = FNR
+        label = label (length(label) ? " " : "") s
+      }
     }
     FILENAME == ARGV[1] {
       if ($0 ~ /\033\[990[0-6]m/) bad = 1
@@ -1581,11 +1603,13 @@ md_heading_rows() {
         if (mark == "0") {
           if (!line) bad = 1
           add(before)
-          printf "%d\t%s\n", line, length(label) ? label : "(empty heading)"
+          printf "%d\t%s\n", text_line ? text_line : line, length(label) ? label : "(empty heading)"
           line = 0
         } else {
           if (line) bad = 1
           line = FNR
+          text_line = 0
+          gutter = visible(before)
           label = ""
         }
       }
@@ -1621,7 +1645,9 @@ md_pick_heading() {
 }
 
 md_heading_action() {
-  local action="$PREEN_STATE/md-heading-action" result width
+  local file="$1" action="$PREEN_STATE/md-heading-action" result width
+  local current="$PREEN_STATE/md-heading-current" accepted="$PREEN_STATE/md-heading-accepted"
+  local jumped="$PREEN_STATE/md-heading-jumped"
   IFS=' ' read -r result width 2>/dev/null < "$action" || return 0
   rm -f "$action"
   if [ -f "$PREEN_STATE/quit" ]; then
@@ -1639,9 +1665,27 @@ md_heading_action() {
         printf 'change-border-label( preen · md · preview resized, try again )'
         return
       fi
-      printf 'change-border-label( preen · md )+change-preview-window(+0)+change-preview-window(+%s)+refresh-preview' "$result"
+      # Verify the offset against the current document and style. Feed those
+      # same bytes to fzf so a later edit cannot race the preview refresh.
+      if [ -z "$file" ] || ! render_md "$width" "$file" > "$current" 2>/dev/null ||
+         ! cmp -s "$PREEN_STATE/md-heading-preview" "$current" ||
+         ! mv -f "$current" "$accepted" || ! : > "$jumped"; then
+        rm -f "$jumped"
+        printf 'change-border-label( preen · md · preview changed, try again )+change-preview-window(+0)+refresh-preview'
+        return
+      fi
+      printf 'change-border-label( preen · md )+change-preview-window(+0)+change-preview-window(+%s)+preview(cat "$PREEN_STATE/md-heading-accepted")' "$result"
       ;;
   esac
+}
+
+md_heading_reset() {
+  rm -f "$PREEN_STATE/md-heading-jumped"
+  if [ -n "${FZF_PREVIEW_COLUMNS:-}" ]; then
+    printf 'change-preview-window(+0)+refresh-preview'
+  else
+    printf 'change-preview-window(+0,hidden)'
+  fi
 }
 
 # Glow already parses Markdown, including reference links and links in tables.
@@ -1825,7 +1869,8 @@ md_link_action() {
 # ---- hooks fzf calls back into ----------------------------------------------
 case "${1:-}" in
   --md-headings) md_pick_heading "${2:-}"; exit $? ;;
-  --md-heading-action) md_heading_action; exit $? ;;
+  --md-heading-action) md_heading_action "${2:-}"; exit $? ;;
+  --md-heading-reset) md_heading_reset; exit $? ;;
   --md-links) md_pick_link "${2:-}"; exit $? ;;
   --md-link-action) md_link_action "$2"; exit $? ;;
   --edit)
@@ -2066,9 +2111,11 @@ run_picker() {
         # A hidden preview has no dimensions. Ignore a width inherited from
         # an outer fzf so it cannot stand in for the hidden inner preview.
         unset FZF_PREVIEW_COLUMNS
-        HEADER="$HEADER · ctrl-g headings"
-        md_reset="transform(sh -c 'if [ -n \"\$FZF_PREVIEW_COLUMNS\" ]; then printf \"change-preview-window(+0)\"; else printf \"change-preview-window(+0,hidden)\"; fi')"
-        md_args+=(--bind 'ctrl-g:execute("$PREEN_SELF" --md-headings {})+transform("$PREEN_SELF" --md-heading-action)'
+        HEADER="$HEADER"$'\nctrl-g headings'
+        # fzf can enqueue the next preview before running its focus action.
+        # Restart that preview once with the cleared jump offset.
+        md_reset='transform(test -f "$PREEN_STATE/md-heading-jumped" && "$PREEN_SELF" --md-heading-reset)'
+        md_args+=(--bind 'ctrl-g:execute("$PREEN_SELF" --md-headings {})+transform("$PREEN_SELF" --md-heading-action {})'
           --bind "focus:$md_reset" --bind "resize:$md_reset")
       fi
       ;;
