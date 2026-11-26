@@ -51,6 +51,8 @@ test-layout.sh preen-test+new_repo
 test-log.sh preen-dep+source
 test-log.sh preen-log
 test-log.sh preen-test+new_repo
+test-md-headings.sh preen-dep+source
+test-md-headings.sh preen-md-headings
 test-md-links.sh preen-dep+source
 test-md-links.sh preen-md-links
 test-notes.sh preen-dep+source

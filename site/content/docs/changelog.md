@@ -15,6 +15,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`ctrl-g` jumps to a Markdown heading** in the picker (#59). Choose a
+  heading to scroll to its position in the current preview. Requires fzf
+  0.57 or newer.
+
 ## [0.6.0]
 
 ### Added

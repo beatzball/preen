@@ -32,6 +32,11 @@ It finds every `.md` and `.markdown` file below the directory you name,
 skipping `.git/` and `node_modules/`, and sorts them. The file list is on the
 left; `glow` renders the file under the cursor on the right.
 
+With fzf 0.57 or newer, press `ctrl-g` to choose a heading in the current
+file. Selecting it scrolls the preview to that heading at the current width.
+The menu includes the preview line number so you can tell repeated headings
+apart. Press `esc` to return to the file list.
+
 With fzf 0.45 or newer, press `ctrl-l` to choose a relative Markdown link
 from the current file.
 Following a link clears the search and selects its destination in the file
@@ -273,12 +278,13 @@ one common mistake silently breaks it.
 | `ctrl-y` | preview and confirm sending the worktree's saved notes through roost |
 | `ctrl-v` | mark or unmark the current diff, PR, commit, or worktree file as viewed |
 | `ctrl-l` | choose a relative Markdown link (md mode, fzf 0.45 or newer) |
+| `ctrl-g` | jump to a Markdown heading (md mode, fzf 0.57 or newer) |
 | `ctrl-d` / `ctrl-u` | scroll the preview 8 lines |
 | `pgdn` / `pgup` | scroll the preview half a page |
 | `shift-down` / `shift-up` | scroll the preview one line |
 | `home` / `end` | jump the preview to the top or bottom |
 | `ctrl-/` | hide or show the preview |
-| `esc` | return from links, worktree files, or commit files, or quit |
+| `esc` | return from headings, links, worktree files, or commit files, or quit |
 | `ctrl-c` | quit |
 
 `preen watch` keeps the diff picker keys while refreshing the list and preview.
